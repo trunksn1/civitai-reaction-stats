@@ -5,6 +5,16 @@
 
 const STATS_ITEM_ID = 'civitai-stats-menu-item';
 let observerActive = false;
+const DEBUG = true; // Enable debug logging
+
+/**
+ * Debug logger
+ */
+function debug(...args) {
+  if (DEBUG) {
+    console.log('[Civitai Stats]', ...args);
+  }
+}
 
 /**
  * Check if user appears to be logged in
@@ -76,44 +86,76 @@ function findInsertPosition(menu) {
 function injectStatsMenuItem(menu) {
   // Check if already injected
   if (menu.querySelector(`#${STATS_ITEM_ID}`)) {
+    debug('Menu item already injected, skipping');
     return;
   }
 
   // Verify this looks like a user menu (has typical items like Settings, Profile)
   const menuText = menu.textContent.toLowerCase();
-  const isUserMenu = menuText.includes('profile') ||
-                     menuText.includes('settings') ||
-                     menuText.includes('account') ||
-                     menuText.includes('sign out') ||
-                     menuText.includes('log out');
+  debug('Menu text content:', menuText.substring(0, 200));
+
+  // Check for user menu indicators - be more flexible with matching
+  const userMenuKeywords = [
+    'profile', 'settings', 'account', 'sign out', 'log out', 'logout',
+    'buzz', 'creator', 'my stuff', 'collections', 'articles', 'bounties',
+    'switch accounts', 'dark mode', 'vault'
+  ];
+
+  const isUserMenu = userMenuKeywords.some(keyword => menuText.includes(keyword));
 
   if (!isUserMenu) {
+    debug('Not a user menu, skipping');
     return;
   }
 
+  debug('User menu detected, injecting Stats item');
   const statsItem = createStatsMenuItem();
   const insertBefore = findInsertPosition(menu);
 
   if (insertBefore) {
     insertBefore.parentNode.insertBefore(statsItem, insertBefore);
+    debug('Stats item inserted before:', insertBefore.textContent?.substring(0, 30));
   } else {
     menu.appendChild(statsItem);
+    debug('Stats item appended to menu');
   }
 
-  console.log('[Civitai Stats] Menu item injected');
+  debug('Menu item injected successfully');
 }
 
 /**
  * Check for dropdown menus and inject if found
  */
 function checkForMenus() {
-  // Look for Mantine dropdown menus or any role="menu" element
-  const menus = document.querySelectorAll('[role="menu"], [class*="mantine-Menu-dropdown"]');
+  // Multiple selectors to catch Mantine menus with various class patterns
+  const selectors = [
+    '[role="menu"]',
+    '[class*="mantine-Menu-dropdown"]',
+    '[class*="Menu-dropdown"]',
+    '[class*="mantine-"][class*="Menu"][class*="dropdown"]',
+    '.mantine-Menu-dropdown',
+    '[data-menu-dropdown]',
+    '[class*="Popover-dropdown"]',
+    // Also check for menu items container patterns
+    'div[class*="mantine-"][role="presentation"]'
+  ];
 
-  menus.forEach(menu => {
+  const selectorString = selectors.join(', ');
+  const menus = document.querySelectorAll(selectorString);
+
+  debug(`Found ${menus.length} potential menus`);
+
+  menus.forEach((menu, index) => {
     // Only process if visible
     const rect = menu.getBoundingClientRect();
-    if (rect.width > 0 && rect.height > 0) {
+    const style = window.getComputedStyle(menu);
+    const isVisible = rect.width > 0 && rect.height > 0 &&
+                      style.display !== 'none' &&
+                      style.visibility !== 'hidden' &&
+                      style.opacity !== '0';
+
+    if (isVisible) {
+      debug(`Processing visible menu ${index}:`, menu.className?.substring(0, 100));
       injectStatsMenuItem(menu);
     }
   });
@@ -132,14 +174,32 @@ function setupObserver() {
 
     for (const mutation of mutations) {
       if (mutation.addedNodes.length > 0) {
-        shouldCheck = true;
-        break;
+        // Check if any added node might be or contain a menu
+        for (const node of mutation.addedNodes) {
+          if (node.nodeType === Node.ELEMENT_NODE) {
+            const className = node.className || '';
+            const role = node.getAttribute?.('role') || '';
+
+            // Check if this node or its content might be a menu
+            if (role === 'menu' ||
+                className.includes?.('Menu') ||
+                className.includes?.('dropdown') ||
+                className.includes?.('mantine') ||
+                node.querySelector?.('[role="menu"], [class*="Menu-dropdown"]')) {
+              shouldCheck = true;
+              break;
+            }
+          }
+        }
       }
+      if (shouldCheck) break;
     }
 
     if (shouldCheck) {
       // Use requestAnimationFrame to batch checks
       requestAnimationFrame(checkForMenus);
+      // Also check after a small delay for menus that animate in
+      setTimeout(checkForMenus, 50);
     }
   });
 
@@ -149,7 +209,7 @@ function setupObserver() {
   });
 
   observerActive = true;
-  console.log('[Civitai Stats] Observer active');
+  debug('MutationObserver active');
 }
 
 /**
@@ -161,13 +221,21 @@ function init() {
     return;
   }
 
-  console.log('[Civitai Stats] Content script loaded');
+  debug('Content script loaded on', window.location.href);
 
   // Set up observer for menu detection
   setupObserver();
 
   // Also check immediately in case menu is already open
   checkForMenus();
+
+  // Additionally, listen for click events on potential menu triggers
+  // This helps catch menus that appear from specific user interactions
+  document.addEventListener('click', () => {
+    // Small delay to allow menu to render
+    setTimeout(checkForMenus, 100);
+    setTimeout(checkForMenus, 300);
+  }, true);
 }
 
 // Initialize when DOM is ready

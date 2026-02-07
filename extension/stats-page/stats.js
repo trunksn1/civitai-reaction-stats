@@ -17,6 +17,10 @@ let visibleLines = {
 let displayedImages = 10;
 const IMAGES_PER_PAGE = 10;
 
+// Track per-image chart state
+const imageCharts = new Map(); // Map<imageId, Chart>
+const imageTimeRanges = new Map(); // Map<imageId, timeRange>
+
 // Colors matching Civitai's palette
 const CHART_COLORS = {
   total: '#be4bdb',
@@ -341,8 +345,10 @@ function getChartData() {
 /**
  * Filter snapshots by time range
  */
-function filterByTimeRange(snapshots) {
-  if (currentTimeRange === 'all') {
+function filterByTimeRange(snapshots, timeRange = null) {
+  const range = timeRange || currentTimeRange;
+
+  if (range === 'all') {
     return snapshots;
   }
 
@@ -350,10 +356,11 @@ function filterByTimeRange(snapshots) {
   const ranges = {
     '7d': 7 * 24 * 60 * 60 * 1000,
     '30d': 30 * 24 * 60 * 60 * 1000,
-    '90d': 90 * 24 * 60 * 60 * 1000
+    '90d': 90 * 24 * 60 * 60 * 1000,
+    '1y': 365 * 24 * 60 * 60 * 1000
   };
 
-  const threshold = now - ranges[currentTimeRange];
+  const threshold = now - ranges[range];
 
   return snapshots.filter(s => new Date(s.timestamp).getTime() >= threshold);
 }
@@ -366,16 +373,205 @@ function renderImages(sortBy = 'newest') {
   const grid = document.getElementById('imagesGrid');
   const loadMoreContainer = document.getElementById('loadMoreContainer');
 
+  // Clean up existing charts before re-rendering
+  imageCharts.forEach(chart => chart.destroy());
+  imageCharts.clear();
+  imageTimeRanges.clear();
+
   // Update count
   document.getElementById('imageCount').textContent = `${images.length} images`;
 
   // Get images to display
   const toDisplay = images.slice(0, displayedImages);
 
-  grid.innerHTML = toDisplay.map(img => createImageCard(img)).join('');
+  grid.innerHTML = toDisplay.map((img, index) => createImageCard(img, index)).join('');
+
+  // Set up event listeners for chart toggles
+  setupImageChartListeners(toDisplay);
 
   // Show/hide load more button
   loadMoreContainer.style.display = displayedImages < images.length ? 'flex' : 'none';
+}
+
+/**
+ * Set up event listeners for image chart toggles and time selectors
+ */
+function setupImageChartListeners(images) {
+  // Chart toggle buttons
+  document.querySelectorAll('.image-chart-toggle').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const index = parseInt(btn.dataset.imageIndex);
+      const imageId = btn.dataset.imageId;
+      const container = document.getElementById(`chart-container-${index}`);
+      const isExpanded = container.classList.contains('visible');
+
+      if (isExpanded) {
+        // Collapse
+        container.classList.remove('visible');
+        btn.classList.remove('expanded');
+        btn.querySelector('span').textContent = 'Show Chart';
+      } else {
+        // Expand
+        container.classList.add('visible');
+        btn.classList.add('expanded');
+        btn.querySelector('span').textContent = 'Hide Chart';
+
+        // Render chart if not already rendered
+        if (!imageCharts.has(imageId)) {
+          const image = images.find(img => img.id === imageId);
+          if (image) {
+            const timeRange = imageTimeRanges.get(imageId) || '7d';
+            renderImageChart(image, index, timeRange);
+          }
+        }
+      }
+    });
+  });
+
+  // Time selector buttons for each image
+  document.querySelectorAll('.image-time-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const imageId = btn.dataset.imageId;
+      const range = btn.dataset.range;
+
+      // Update active state
+      const parent = btn.closest('.image-time-selector');
+      parent.querySelectorAll('.image-time-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+
+      // Store and update chart
+      imageTimeRanges.set(imageId, range);
+
+      const image = images.find(img => img.id === imageId);
+      const card = btn.closest('.image-card');
+      const index = parseInt(card.querySelector('.image-chart-toggle').dataset.imageIndex);
+
+      if (image) {
+        renderImageChart(image, index, range);
+      }
+    });
+  });
+}
+
+/**
+ * Render chart for a single image
+ */
+function renderImageChart(image, index, timeRange) {
+  const canvasId = `image-chart-${index}`;
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+
+  const ctx = canvas.getContext('2d');
+
+  // Destroy existing chart if any
+  if (imageCharts.has(image.id)) {
+    imageCharts.get(image.id).destroy();
+  }
+
+  const snapshots = filterByTimeRange(image.snapshots || [], timeRange);
+
+  if (snapshots.length < 2) {
+    // Not enough data points
+    canvas.style.display = 'none';
+    const wrapper = canvas.closest('.image-chart-wrapper');
+    if (!wrapper.querySelector('.image-chart-empty')) {
+      wrapper.innerHTML = '<div class="image-chart-empty">Not enough data for selected time range</div>';
+    }
+    return;
+  }
+
+  canvas.style.display = 'block';
+  const wrapper = canvas.closest('.image-chart-wrapper');
+  const emptyMsg = wrapper.querySelector('.image-chart-empty');
+  if (emptyMsg) emptyMsg.remove();
+
+  const labels = snapshots.map(s => formatChartDate(new Date(s.timestamp)));
+
+  const chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Total',
+          data: snapshots.map(s => (s.likes || 0) + (s.hearts || 0) + (s.laughs || 0) + (s.cries || 0)),
+          borderColor: CHART_COLORS.total,
+          backgroundColor: CHART_COLORS.total + '20',
+          borderWidth: 2,
+          tension: 0.3,
+          fill: false,
+          pointRadius: snapshots.length > 30 ? 0 : 2,
+          pointHoverRadius: 4
+        },
+        {
+          label: 'Likes',
+          data: snapshots.map(s => s.likes || 0),
+          borderColor: CHART_COLORS.likes,
+          borderWidth: 1.5,
+          tension: 0.3,
+          fill: false,
+          pointRadius: 0,
+          pointHoverRadius: 3
+        },
+        {
+          label: 'Hearts',
+          data: snapshots.map(s => s.hearts || 0),
+          borderColor: CHART_COLORS.hearts,
+          borderWidth: 1.5,
+          tension: 0.3,
+          fill: false,
+          pointRadius: 0,
+          pointHoverRadius: 3
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: {
+        mode: 'index',
+        intersect: false
+      },
+      plugins: {
+        legend: {
+          display: false
+        },
+        tooltip: {
+          backgroundColor: '#25262b',
+          titleColor: '#fff',
+          bodyColor: '#c1c2c5',
+          borderColor: '#373a40',
+          borderWidth: 1,
+          padding: 8,
+          displayColors: true,
+          callbacks: {
+            label: function(context) {
+              return `${context.dataset.label}: ${formatNumber(context.parsed.y)}`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          display: false
+        },
+        y: {
+          grid: {
+            color: 'rgba(55, 58, 64, 0.3)',
+            drawBorder: false
+          },
+          ticks: {
+            color: '#909296',
+            font: { size: 10 },
+            callback: value => formatNumber(value)
+          },
+          beginAtZero: true
+        }
+      }
+    }
+  });
+
+  imageCharts.set(image.id, chart);
 }
 
 /**
@@ -387,16 +583,28 @@ function sortImages(images, sortBy) {
       return images.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
     case 'reactions':
       return images.sort((a, b) => {
-        const aTotal = getTotalReactions(a.currentStats);
-        const bTotal = getTotalReactions(b.currentStats);
+        const aTotal = getTotalReactions(getCurrentStats(a));
+        const bTotal = getTotalReactions(getCurrentStats(b));
         return bTotal - aTotal;
       });
     case 'comments':
-      return images.sort((a, b) => (b.currentStats?.comments || 0) - (a.currentStats?.comments || 0));
+      return images.sort((a, b) => (getCurrentStats(b).comments || 0) - (getCurrentStats(a).comments || 0));
     case 'newest':
     default:
       return images.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   }
+}
+
+/**
+ * Get current stats from an image (latest snapshot or legacy currentStats)
+ */
+function getCurrentStats(image) {
+  // Support new snapshots format
+  if (image.snapshots && image.snapshots.length > 0) {
+    return image.snapshots[image.snapshots.length - 1];
+  }
+  // Fallback to legacy format
+  return image.currentStats || { likes: 0, hearts: 0, laughs: 0, cries: 0, comments: 0 };
 }
 
 /**
@@ -410,48 +618,76 @@ function getTotalReactions(stats) {
 /**
  * Create an image card HTML
  */
-function createImageCard(image) {
-  const stats = image.currentStats || {};
+function createImageCard(image, index) {
+  const stats = getCurrentStats(image);
   const date = image.createdAt ? formatDate(new Date(image.createdAt)) : 'Unknown';
+  const hasSnapshots = image.snapshots && image.snapshots.length > 1;
 
   return `
-    <div class="image-card">
-      <div class="image-thumbnail">
-        ${image.thumbnailUrl
-          ? `<img src="${escapeHtml(image.thumbnailUrl)}" alt="" loading="lazy">`
-          : '<div class="placeholder">?</div>'
-        }
-      </div>
-      <div class="image-info">
-        <div class="image-name">
-          <a href="${escapeHtml(image.url)}" target="_blank" rel="noopener">
-            ${escapeHtml(image.name || `Image ${image.id}`)}
-          </a>
+    <div class="image-card" data-image-id="${escapeHtml(image.id)}">
+      <div class="image-card-header">
+        <div class="image-thumbnail">
+          ${image.thumbnailUrl
+            ? `<img src="${escapeHtml(image.thumbnailUrl)}" alt="" loading="lazy">`
+            : '<div class="placeholder">?</div>'
+          }
         </div>
-        <div class="image-date">${date}</div>
-        <div class="image-stats">
-          <span class="stat-badge likes">
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>
-            ${formatNumber(stats.likes || 0)}
-          </span>
-          <span class="stat-badge hearts">
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
-            ${formatNumber(stats.hearts || 0)}
-          </span>
-          <span class="stat-badge laughs">
-            <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>
-            ${formatNumber(stats.laughs || 0)}
-          </span>
-          <span class="stat-badge cries">
-            <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>
-            ${formatNumber(stats.cries || 0)}
-          </span>
-          <span class="stat-badge comments">
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-            ${formatNumber(stats.comments || 0)}
-          </span>
+        <div class="image-info">
+          <div class="image-name">
+            <a href="${escapeHtml(image.url)}" target="_blank" rel="noopener">
+              ${escapeHtml(image.name || `Image ${image.id}`)}
+            </a>
+          </div>
+          <div class="image-date">${date}</div>
+          <div class="image-stats">
+            <span class="stat-badge likes">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>
+              ${formatNumber(stats.likes || 0)}
+            </span>
+            <span class="stat-badge hearts">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+              ${formatNumber(stats.hearts || 0)}
+            </span>
+            <span class="stat-badge laughs">
+              <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>
+              ${formatNumber(stats.laughs || 0)}
+            </span>
+            <span class="stat-badge cries">
+              <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>
+              ${formatNumber(stats.cries || 0)}
+            </span>
+            <span class="stat-badge comments">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              ${formatNumber(stats.comments || 0)}
+            </span>
+          </div>
         </div>
       </div>
+      ${hasSnapshots ? `
+        <button class="image-chart-toggle" data-image-index="${index}" data-image-id="${escapeHtml(image.id)}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+          <span>Show Chart</span>
+        </button>
+        <div class="image-chart-container" id="chart-container-${index}">
+          <div class="image-chart-controls">
+            <div class="image-time-selector">
+              <button class="image-time-btn active" data-range="7d" data-image-id="${escapeHtml(image.id)}">7D</button>
+              <button class="image-time-btn" data-range="30d" data-image-id="${escapeHtml(image.id)}">30D</button>
+              <button class="image-time-btn" data-range="1y" data-image-id="${escapeHtml(image.id)}">1Y</button>
+              <button class="image-time-btn" data-range="all" data-image-id="${escapeHtml(image.id)}">All</button>
+            </div>
+          </div>
+          <div class="image-chart-wrapper">
+            <canvas id="image-chart-${index}"></canvas>
+          </div>
+        </div>
+      ` : `
+        <div class="image-chart-empty-note" style="font-size: 11px; color: var(--text-muted); margin-top: 8px; text-align: center;">
+          Historical data will appear after more snapshots are collected
+        </div>
+      `}
     </div>
   `;
 }

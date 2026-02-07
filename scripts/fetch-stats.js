@@ -220,9 +220,13 @@ function applyRetentionPolicy(snapshots) {
 
 /**
  * Process images and create current snapshot
+ * Merges new snapshot data with existing image snapshots
  */
-function processImages(apiImages) {
+function processImages(apiImages, existingImages = []) {
   const timestamp = new Date().toISOString();
+
+  // Create a map of existing images for quick lookup
+  const existingImageMap = new Map(existingImages.map(img => [img.id, img]));
 
   // Calculate totals
   let totalLikes = 0;
@@ -244,19 +248,33 @@ function processImages(apiImages) {
     totalCries += cries;
     totalComments += comments;
 
+    // Create new snapshot for this image
+    const newSnapshot = {
+      timestamp,
+      likes,
+      hearts,
+      laughs,
+      cries,
+      comments
+    };
+
+    // Get existing image data if available
+    const existingImage = existingImageMap.get(String(img.id));
+
+    // Merge with existing snapshots
+    let snapshots = existingImage?.snapshots || [];
+    snapshots.push(newSnapshot);
+
+    // Apply same retention policy as totalSnapshots
+    snapshots = applyRetentionPolicy(snapshots);
+
     return {
       id: String(img.id),
       name: img.meta?.prompt?.substring(0, 100) || `Image ${img.id}`,
       url: `https://civitai.com/images/${img.id}`,
       thumbnailUrl: img.url,
       createdAt: img.createdAt,
-      currentStats: {
-        likes,
-        hearts,
-        laughs,
-        cries,
-        comments
-      }
+      snapshots
     };
   });
 
@@ -291,8 +309,11 @@ async function main() {
       return;
     }
 
-    // Process images and create snapshot
-    const { images, totalSnapshot } = processImages(apiImages);
+    // Read existing Gist data
+    const existingData = await readGistData();
+
+    // Process images with existing data to merge snapshots
+    const { images, totalSnapshot } = processImages(apiImages, existingData.images);
 
     console.log('\nSnapshot created:');
     console.log(`  Images: ${totalSnapshot.imageCount}`);
@@ -302,22 +323,19 @@ async function main() {
     console.log(`  Cries: ${totalSnapshot.cries}`);
     console.log(`  Comments: ${totalSnapshot.comments}`);
 
-    // Read existing Gist data
-    const existingData = await readGistData();
-
     // Append new snapshot
     existingData.totalSnapshots.push(totalSnapshot);
 
-    // Apply retention policy
+    // Apply retention policy to total snapshots
     const snapshotsBefore = existingData.totalSnapshots.length;
     existingData.totalSnapshots = applyRetentionPolicy(existingData.totalSnapshots);
     const snapshotsAfter = existingData.totalSnapshots.length;
 
     if (snapshotsBefore !== snapshotsAfter) {
-      console.log(`\nRetention policy: ${snapshotsBefore} -> ${snapshotsAfter} snapshots`);
+      console.log(`\nRetention policy (total): ${snapshotsBefore} -> ${snapshotsAfter} snapshots`);
     }
 
-    // Update images with current stats
+    // Update images with merged snapshots
     existingData.images = images;
     existingData.username = CIVITAI_USERNAME;
     existingData.lastUpdated = totalSnapshot.timestamp;

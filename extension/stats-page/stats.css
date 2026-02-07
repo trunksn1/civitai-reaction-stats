@@ -517,6 +517,107 @@ body {
   margin-top: 20px;
 }
 
+/* Image Card Chart Expansion */
+.image-card {
+  flex-direction: column;
+}
+
+.image-card-header {
+  display: flex;
+  gap: 12px;
+}
+
+.image-chart-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px;
+  margin-top: 8px;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.image-chart-toggle:hover {
+  background-color: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.image-chart-toggle svg {
+  width: 14px;
+  height: 14px;
+  transition: transform 0.2s;
+}
+
+.image-chart-toggle.expanded svg {
+  transform: rotate(180deg);
+}
+
+.image-chart-container {
+  display: none;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+
+.image-chart-container.visible {
+  display: block;
+}
+
+.image-chart-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.image-time-selector {
+  display: flex;
+  background-color: var(--bg-secondary);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.image-time-btn {
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.image-time-btn:hover {
+  color: var(--text-secondary);
+}
+
+.image-time-btn.active {
+  background-color: var(--accent-blue);
+  color: #fff;
+}
+
+.image-chart-wrapper {
+  position: relative;
+  height: 150px;
+}
+
+.image-chart-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 150px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
   .container {
