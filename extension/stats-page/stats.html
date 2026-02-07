@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Civitai Reaction Stats</title>
+  <link rel="stylesheet" href="stats.css">
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <header class="header">
+      <h1>Civitai Reaction Stats</h1>
+      <div class="header-actions">
+        <span class="last-updated" id="lastUpdated"></span>
+        <button class="btn btn-icon" id="refreshBtn" title="Refresh data">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 12a9 9 0 11-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path>
+            <path d="M21 3v5h-5"></path>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Loading State -->
+    <div class="loading" id="loading">
+      <div class="spinner"></div>
+      <p>Loading stats...</p>
+    </div>
+
+    <!-- Error State -->
+    <div class="error-container" id="errorContainer" style="display: none;">
+      <div class="error-icon">!</div>
+      <h2>Unable to load stats</h2>
+      <p id="errorMessage"></p>
+      <button class="btn btn-primary" id="retryBtn">Retry</button>
+    </div>
+
+    <!-- Main Content -->
+    <main class="main-content" id="mainContent" style="display: none;">
+      <!-- Summary Cards -->
+      <section class="summary-cards" id="summaryCards">
+        <div class="card summary-card" data-type="total">
+          <div class="card-icon">
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+              <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+            </svg>
+          </div>
+          <div class="card-content">
+            <span class="card-value" id="totalReactions">-</span>
+            <span class="card-label">Total Reactions</span>
+          </div>
+        </div>
+        <div class="card summary-card" data-type="likes">
+          <div class="card-icon likes">
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+              <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/>
+            </svg>
+          </div>
+          <div class="card-content">
+            <span class="card-value" id="totalLikes">-</span>
+            <span class="card-label">Likes</span>
+          </div>
+        </div>
+        <div class="card summary-card" data-type="hearts">
+          <div class="card-icon hearts">
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+              <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+            </svg>
+          </div>
+          <div class="card-content">
+            <span class="card-value" id="totalHearts">-</span>
+            <span class="card-label">Hearts</span>
+          </div>
+        </div>
+        <div class="card summary-card" data-type="laughs">
+          <div class="card-icon laughs">
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M8 14s1.5 2 4 2 4-2 4-2" stroke="#1a1b1e" stroke-width="2" fill="none"/>
+              <line x1="9" y1="9" x2="9.01" y2="9" stroke="#1a1b1e" stroke-width="3"/>
+              <line x1="15" y1="9" x2="15.01" y2="9" stroke="#1a1b1e" stroke-width="3"/>
+            </svg>
+          </div>
+          <div class="card-content">
+            <span class="card-value" id="totalLaughs">-</span>
+            <span class="card-label">Laughs</span>
+          </div>
+        </div>
+        <div class="card summary-card" data-type="cries">
+          <div class="card-icon cries">
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M16 16s-1.5-2-4-2-4 2-4 2" stroke="#1a1b1e" stroke-width="2" fill="none"/>
+              <line x1="9" y1="9" x2="9.01" y2="9" stroke="#1a1b1e" stroke-width="3"/>
+              <line x1="15" y1="9" x2="15.01" y2="9" stroke="#1a1b1e" stroke-width="3"/>
+            </svg>
+          </div>
+          <div class="card-content">
+            <span class="card-value" id="totalCries">-</span>
+            <span class="card-label">Cries</span>
+          </div>
+        </div>
+        <div class="card summary-card" data-type="comments">
+          <div class="card-icon comments">
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            </svg>
+          </div>
+          <div class="card-content">
+            <span class="card-value" id="totalComments">-</span>
+            <span class="card-label">Comments</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Overview Chart -->
+      <section class="card chart-section">
+        <div class="chart-header">
+          <h2>Reactions Over Time</h2>
+          <div class="chart-controls">
+            <div class="time-selector">
+              <button class="time-btn" data-range="7d">7D</button>
+              <button class="time-btn active" data-range="30d">30D</button>
+              <button class="time-btn" data-range="90d">90D</button>
+              <button class="time-btn" data-range="all">All</button>
+            </div>
+            <div class="line-toggles" id="lineToggles">
+              <label class="toggle-label">
+                <input type="checkbox" data-line="total" checked>
+                <span class="toggle-dot total"></span>
+                Total
+              </label>
+              <label class="toggle-label">
+                <input type="checkbox" data-line="likes" checked>
+                <span class="toggle-dot likes"></span>
+                Likes
+              </label>
+              <label class="toggle-label">
+                <input type="checkbox" data-line="hearts" checked>
+                <span class="toggle-dot hearts"></span>
+                Hearts
+              </label>
+              <label class="toggle-label">
+                <input type="checkbox" data-line="laughs" checked>
+                <span class="toggle-dot laughs"></span>
+                Laughs
+              </label>
+              <label class="toggle-label">
+                <input type="checkbox" data-line="cries" checked>
+                <span class="toggle-dot cries"></span>
+                Cries
+              </label>
+            </div>
+          </div>
+        </div>
+        <div class="chart-container">
+          <canvas id="overviewChart"></canvas>
+        </div>
+      </section>
+
+      <!-- Images Section -->
+      <section class="card images-section">
+        <div class="images-header">
+          <h2>Your Images</h2>
+          <div class="images-controls">
+            <span class="image-count" id="imageCount">0 images</span>
+            <select id="sortSelect" class="sort-select">
+              <option value="newest">Newest First</option>
+              <option value="oldest">Oldest First</option>
+              <option value="reactions">Most Reactions</option>
+              <option value="comments">Most Comments</option>
+            </select>
+          </div>
+        </div>
+        <div class="images-grid" id="imagesGrid">
+          <!-- Images will be populated here -->
+        </div>
+        <div class="load-more-container" id="loadMoreContainer" style="display: none;">
+          <button class="btn btn-secondary" id="loadMoreBtn">Load More</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="../lib/chart.min.js"></script>
+  <script src="stats.js"></script>
+</body>
+</html>

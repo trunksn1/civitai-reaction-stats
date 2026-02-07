@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:developer.civitai.com)",
+      "WebFetch(domain:civitai.com)",
+      "WebFetch(domain:developer.chrome.com)",
+      "WebSearch",
+      "mcp__pal__chat",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:api.github.com)",
+      "Bash(curl:*)",
+      "Bash(node -e:*)",
+      "Bash(dir:*)"
+    ]
+  }
+}

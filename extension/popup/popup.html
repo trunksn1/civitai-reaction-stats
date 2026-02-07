@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Civitai Reaction Stats</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <h1>Civitai Reaction Stats</h1>
+
+    <div class="status-indicator" id="statusIndicator">
+      <span class="status-icon" id="statusIcon"></span>
+      <span class="status-text" id="statusText">Checking...</span>
+    </div>
+
+    <div class="form-group">
+      <label for="gistUrl">Gist Raw URL</label>
+      <input
+        type="url"
+        id="gistUrl"
+        placeholder="https://gist.githubusercontent.com/user/id/raw/stats.json"
+      >
+      <p class="hint">
+        Enter the raw URL of your stats.json Gist file
+      </p>
+    </div>
+
+    <div class="button-group">
+      <button id="saveBtn" class="btn btn-primary">Save</button>
+      <button id="openStatsBtn" class="btn btn-secondary">Open Stats</button>
+    </div>
+
+    <div class="message" id="message"></div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

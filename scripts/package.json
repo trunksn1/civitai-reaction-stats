@@ -1,0 +1,15 @@
+{
+  "name": "civitai-stats-collector",
+  "version": "1.0.0",
+  "description": "Fetches Civitai reaction stats and stores them in a GitHub Gist",
+  "type": "module",
+  "scripts": {
+    "fetch": "node fetch-stats.js"
+  },
+  "dependencies": {
+    "@octokit/rest": "^20.0.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
