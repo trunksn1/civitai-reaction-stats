@@ -171,12 +171,13 @@ function renderSummaryCards() {
   const total = (latest.likes || 0) + (latest.hearts || 0) +
                 (latest.laughs || 0) + (latest.cries || 0);
 
-  document.getElementById('totalReactions').textContent = formatNumber(total);
-  document.getElementById('totalLikes').textContent = formatNumber(latest.likes || 0);
-  document.getElementById('totalHearts').textContent = formatNumber(latest.hearts || 0);
-  document.getElementById('totalLaughs').textContent = formatNumber(latest.laughs || 0);
-  document.getElementById('totalCries').textContent = formatNumber(latest.cries || 0);
-  document.getElementById('totalComments').textContent = formatNumber(latest.comments || 0);
+  // Use full numbers with comma separators for summary cards
+  document.getElementById('totalReactions').textContent = total.toLocaleString();
+  document.getElementById('totalLikes').textContent = (latest.likes || 0).toLocaleString();
+  document.getElementById('totalHearts').textContent = (latest.hearts || 0).toLocaleString();
+  document.getElementById('totalLaughs').textContent = (latest.laughs || 0).toLocaleString();
+  document.getElementById('totalCries').textContent = (latest.cries || 0).toLocaleString();
+  document.getElementById('totalComments').textContent = (latest.comments || 0).toLocaleString();
 }
 
 /**
@@ -384,7 +385,7 @@ function renderImages(sortBy = 'newest') {
   // Get images to display
   const toDisplay = images.slice(0, displayedImages);
 
-  grid.innerHTML = toDisplay.map((img, index) => createImageCard(img, index)).join('');
+  grid.innerHTML = toDisplay.map(img => createImageCard(img)).join('');
 
   // Set up event listeners for chart toggles
   setupImageChartListeners(toDisplay);
@@ -400,9 +401,8 @@ function setupImageChartListeners(images) {
   // Chart toggle buttons
   document.querySelectorAll('.image-chart-toggle').forEach(btn => {
     btn.addEventListener('click', () => {
-      const index = parseInt(btn.dataset.imageIndex);
       const imageId = btn.dataset.imageId;
-      const container = document.getElementById(`chart-container-${index}`);
+      const container = document.getElementById(`chart-container-${imageId}`);
       const isExpanded = container.classList.contains('visible');
 
       if (isExpanded) {
@@ -421,7 +421,7 @@ function setupImageChartListeners(images) {
           const image = images.find(img => img.id === imageId);
           if (image) {
             const timeRange = imageTimeRanges.get(imageId) || '7d';
-            renderImageChart(image, index, timeRange);
+            renderImageChart(image, timeRange);
           }
         }
       }
@@ -443,11 +443,8 @@ function setupImageChartListeners(images) {
       imageTimeRanges.set(imageId, range);
 
       const image = images.find(img => img.id === imageId);
-      const card = btn.closest('.image-card');
-      const index = parseInt(card.querySelector('.image-chart-toggle').dataset.imageIndex);
-
       if (image) {
-        renderImageChart(image, index, range);
+        renderImageChart(image, range);
       }
     });
   });
@@ -456,8 +453,8 @@ function setupImageChartListeners(images) {
 /**
  * Render chart for a single image
  */
-function renderImageChart(image, index, timeRange) {
-  const canvasId = `image-chart-${index}`;
+function renderImageChart(image, timeRange) {
+  const canvasId = `image-chart-${image.id}`;
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
 
@@ -618,7 +615,7 @@ function getTotalReactions(stats) {
 /**
  * Create an image card HTML
  */
-function createImageCard(image, index) {
+function createImageCard(image) {
   const stats = getCurrentStats(image);
   const date = image.createdAt ? formatDate(new Date(image.createdAt)) : 'Unknown';
   const hasSnapshots = image.snapshots && image.snapshots.length > 1;
@@ -664,13 +661,13 @@ function createImageCard(image, index) {
         </div>
       </div>
       ${hasSnapshots ? `
-        <button class="image-chart-toggle" data-image-index="${index}" data-image-id="${escapeHtml(image.id)}">
+        <button class="image-chart-toggle" data-image-id="${escapeHtml(image.id)}">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="6 9 12 15 18 9"></polyline>
           </svg>
           <span>Show Chart</span>
         </button>
-        <div class="image-chart-container" id="chart-container-${index}">
+        <div class="image-chart-container" id="chart-container-${escapeHtml(image.id)}">
           <div class="image-chart-controls">
             <div class="image-time-selector">
               <button class="image-time-btn active" data-range="7d" data-image-id="${escapeHtml(image.id)}">7D</button>
@@ -680,7 +677,7 @@ function createImageCard(image, index) {
             </div>
           </div>
           <div class="image-chart-wrapper">
-            <canvas id="image-chart-${index}"></canvas>
+            <canvas id="image-chart-${escapeHtml(image.id)}"></canvas>
           </div>
         </div>
       ` : `

@@ -77,13 +77,26 @@ async function fetchAllUserImages(username) {
   while (nextPage) {
     pageCount++;
     console.log(`Fetching page ${pageCount}...`);
+    console.log(`  URL: ${nextPage}`);
 
     const data = await fetchWithRetry(nextPage);
 
     if (data.items && data.items.length > 0) {
       allImages.push(...data.items);
       console.log(`  Retrieved ${data.items.length} images (total: ${allImages.length})`);
+
+      // Log first image stats to verify API response includes stats
+      if (pageCount === 1 && data.items[0]) {
+        const first = data.items[0];
+        console.log(`  Sample image from API response:`);
+        console.log(`    ID: ${first.id}`);
+        console.log(`    Stats: likes=${first.stats?.likeCount}, hearts=${first.stats?.heartCount}, laughs=${first.stats?.laughCount}, cries=${first.stats?.cryCount}`);
+        console.log(`    Created: ${first.createdAt}`);
+      }
     }
+
+    // Log metadata to understand pagination
+    console.log(`  Metadata: cursor=${data.metadata?.nextCursor || 'none'}, hasNextPage=${data.metadata?.nextPage ? 'yes' : 'no'}`);
 
     nextPage = data.metadata?.nextPage || null;
 
@@ -91,6 +104,19 @@ async function fetchAllUserImages(username) {
     if (nextPage) {
       await sleep(500);
     }
+  }
+
+  // Log oldest image date to check if 2023 images are included
+  if (allImages.length > 0) {
+    const oldest = allImages.reduce((a, b) =>
+      new Date(a.createdAt) < new Date(b.createdAt) ? a : b
+    );
+    const newest = allImages.reduce((a, b) =>
+      new Date(a.createdAt) > new Date(b.createdAt) ? a : b
+    );
+    console.log(`\nDate range of fetched images:`);
+    console.log(`  Oldest: ID ${oldest.id} from ${oldest.createdAt}`);
+    console.log(`  Newest: ID ${newest.id} from ${newest.createdAt}`);
   }
 
   console.log(`Total images fetched: ${allImages.length}`);
