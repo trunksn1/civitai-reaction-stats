@@ -1,0 +1,23 @@
+﻿2026-02-07T17:48:41.2310507Z ##[group]Run actions/setup-node@v4
+2026-02-07T17:48:41.2311010Z with:
+2026-02-07T17:48:41.2311343Z   node-version: 20
+2026-02-07T17:48:41.2311695Z   cache: npm
+2026-02-07T17:48:41.2312323Z   cache-dependency-path: scripts/package-lock.json
+2026-02-07T17:48:41.2312845Z   always-auth: false
+2026-02-07T17:48:41.2313208Z   check-latest: false
+2026-02-07T17:48:41.2313977Z   token: ***
+2026-02-07T17:48:41.2314314Z ##[endgroup]
+2026-02-07T17:48:41.4281059Z Found in cache @ /opt/hostedtoolcache/node/20.20.0/x64
+2026-02-07T17:48:41.4286653Z ##[group]Environment details
+2026-02-07T17:48:44.2129686Z node: v20.20.0
+2026-02-07T17:48:44.2130377Z npm: 10.8.2
+2026-02-07T17:48:44.2130748Z yarn: 1.22.22
+2026-02-07T17:48:44.2131775Z ##[endgroup]
+2026-02-07T17:48:44.2152118Z [command]/opt/hostedtoolcache/node/20.20.0/x64/bin/npm config get cache
+2026-02-07T17:48:44.5011389Z /home/runner/.npm
+2026-02-07T17:48:44.6479565Z Cache hit for: node-cache-Linux-x64-npm-429d186920c749401a7da92f26b3a4ced128f45e561b21d2866ac5be23aa9410
+2026-02-07T17:48:44.9605179Z Received 785637 of 785637 (100.0%), 3.7 MBs/sec
+2026-02-07T17:48:44.9605945Z Cache Size: ~1 MB (785637 B)
+2026-02-07T17:48:44.9627258Z [command]/usr/bin/tar -xf /home/runner/work/_temp/b80e26c2-66b7-44f1-8c44-cbcbe6173775/cache.tzst -P -C /home/runner/work/civitai-reaction-stats/civitai-reaction-stats --use-compress-program unzstd
+2026-02-07T17:48:44.9698707Z Cache restored successfully
+2026-02-07T17:48:44.9704701Z Cache restored from key: node-cache-Linux-x64-npm-429d186920c749401a7da92f26b3a4ced128f45e561b21d2866ac5be23aa9410

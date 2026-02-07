@@ -29,3 +29,4 @@ jobs:
           GIST_ID: ${{ secrets.GIST_ID }}
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
           CIVITAI_USERNAME: ${{ secrets.CIVITAI_USERNAME }}
+          CIVITAI_API_KEY: ${{ secrets.CIVITAI_API_KEY }}

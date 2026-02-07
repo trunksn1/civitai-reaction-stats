@@ -4,6 +4,7 @@ import { Octokit } from '@octokit/rest';
 const GIST_ID = process.env.GIST_ID;
 const GIST_TOKEN = process.env.GIST_TOKEN;
 const CIVITAI_USERNAME = process.env.CIVITAI_USERNAME;
+const CIVITAI_API_KEY = process.env.CIVITAI_API_KEY; // Optional - may help get accurate stats
 
 // Validate required environment variables
 if (!GIST_ID || !GIST_TOKEN || !CIVITAI_USERNAME) {
@@ -12,6 +13,12 @@ if (!GIST_ID || !GIST_TOKEN || !CIVITAI_USERNAME) {
   if (!GIST_TOKEN) console.error('  - GIST_TOKEN');
   if (!CIVITAI_USERNAME) console.error('  - CIVITAI_USERNAME');
   process.exit(1);
+}
+
+if (CIVITAI_API_KEY) {
+  console.log('Using Civitai API key for authenticated requests');
+} else {
+  console.log('No CIVITAI_API_KEY set - using unauthenticated requests');
 }
 
 const octokit = new Octokit({ auth: GIST_TOKEN });
@@ -32,7 +39,11 @@ const SIX_HOUR_RETENTION_DAYS = 30;
 async function fetchWithRetry(url, retries = MAX_RETRIES, backoff = INITIAL_BACKOFF_MS) {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      const response = await fetch(url);
+      const headers = {};
+      if (CIVITAI_API_KEY) {
+        headers['Authorization'] = `Bearer ${CIVITAI_API_KEY}`;
+      }
+      const response = await fetch(url, { headers });
 
       if (response.status === 429) {
         // Rate limited - wait and retry
@@ -69,7 +80,8 @@ function sleep(ms) {
  */
 async function fetchAllUserImages(username) {
   const allImages = [];
-  let nextPage = `${CIVITAI_API_BASE}/images?username=${encodeURIComponent(username)}&limit=${IMAGES_PER_PAGE}&sort=Newest`;
+  // Use period=AllTime to ensure we get all historical images
+  let nextPage = `${CIVITAI_API_BASE}/images?username=${encodeURIComponent(username)}&limit=${IMAGES_PER_PAGE}&sort=Newest&period=AllTime`;
   let pageCount = 0;
 
   console.log(`Fetching images for user: ${username}`);
@@ -117,9 +129,36 @@ async function fetchAllUserImages(username) {
     console.log(`\nDate range of fetched images:`);
     console.log(`  Oldest: ID ${oldest.id} from ${oldest.createdAt}`);
     console.log(`  Newest: ID ${newest.id} from ${newest.createdAt}`);
+
+    // Count images with zero stats vs images with stats
+    let zeroStatsCount = 0;
+    let hasStatsCount = 0;
+    for (const img of allImages) {
+      const total = (img.stats?.likeCount || 0) + (img.stats?.heartCount || 0) +
+                    (img.stats?.laughCount || 0) + (img.stats?.cryCount || 0);
+      if (total === 0) {
+        zeroStatsCount++;
+      } else {
+        hasStatsCount++;
+      }
+    }
+    console.log(`\nStats analysis:`);
+    console.log(`  Images with reactions: ${hasStatsCount}`);
+    console.log(`  Images with 0 reactions: ${zeroStatsCount}`);
+
+    // Show a sample of images with stats to verify API is working
+    const withStats = allImages.filter(img =>
+      (img.stats?.likeCount || 0) + (img.stats?.heartCount || 0) > 0
+    ).slice(0, 3);
+    if (withStats.length > 0) {
+      console.log(`\nSample images WITH stats:`);
+      for (const img of withStats) {
+        console.log(`  ID ${img.id}: likes=${img.stats?.likeCount}, hearts=${img.stats?.heartCount} (created: ${img.createdAt})`);
+      }
+    }
   }
 
-  console.log(`Total images fetched: ${allImages.length}`);
+  console.log(`\nTotal images fetched: ${allImages.length}`);
   return allImages;
 }
 
