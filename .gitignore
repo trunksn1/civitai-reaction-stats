@@ -6,3 +6,11 @@ old/
 *.txt
 stats.json
 PLAN.md
+
+# Secrets & env
+.env
+.env.*
+
+# Logs & archives
+*.log
+*.zip
