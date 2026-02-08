@@ -12,7 +12,9 @@ let visibleLines = {
   likes: true,
   hearts: true,
   laughs: true,
-  cries: true
+  cries: true,
+  buzz: true,
+  collects: true
 };
 let displayedImages = 10;
 const IMAGES_PER_PAGE = 10;
@@ -28,7 +30,10 @@ const LABEL_EMOJI = {
   'Likes': '\u{1F44D}',      // 👍
   'Hearts': '\u2764\uFE0F',  // ❤️
   'Laughs': '\u{1F604}',     // 😄
-  'Cries': '\u{1F622}'       // 😢
+  'Cries': '\u{1F622}',      // 😢
+  'Buzz': '\u26A1',           // ⚡
+  'Collects': '\u{1F516}',   // 🔖
+  'Views': '\u{1F441}'       // 👁
 };
 
 /**
@@ -39,16 +44,19 @@ const LABEL_EMOJI = {
 function resolveSnapshots(snapshots) {
   if (!snapshots || snapshots.length === 0) return [];
   const result = [];
-  let current = { likes: 0, hearts: 0, laughs: 0, cries: 0, comments: 0 };
+  let current = { likes: 0, hearts: 0, laughs: 0, cries: 0, comments: 0, buzz: 0, collects: 0, views: 0 };
 
   for (const s of snapshots) {
-    if ('dl' in s || 'dh' in s || 'dla' in s || 'dc' in s || 'dco' in s || '_d' in s) {
+    if ('dl' in s || 'dh' in s || 'dla' in s || 'dc' in s || 'dco' in s || '_d' in s || 'dbu' in s || 'dcol' in s || 'dvi' in s) {
       current = {
         likes: current.likes + (s.dl || 0),
         hearts: current.hearts + (s.dh || 0),
         laughs: current.laughs + (s.dla || 0),
         cries: current.cries + (s.dc || 0),
-        comments: current.comments + (s.dco || 0)
+        comments: current.comments + (s.dco || 0),
+        buzz: current.buzz + (s.dbu || 0),
+        collects: current.collects + (s.dcol || 0),
+        views: current.views + (s.dvi || 0)
       };
     } else {
       current = {
@@ -56,7 +64,10 @@ function resolveSnapshots(snapshots) {
         hearts: s.hearts || 0,
         laughs: s.laughs || 0,
         cries: s.cries || 0,
-        comments: s.comments || 0
+        comments: s.comments || 0,
+        buzz: s.buzz || 0,
+        collects: s.collects || 0,
+        views: s.views || 0
       };
     }
     result.push({ timestamp: s.timestamp, ...current });
@@ -71,7 +82,10 @@ const CHART_COLORS = {
   hearts: '#f06595',
   laughs: '#fcc419',
   cries: '#748ffc',
-  comments: '#69db7c'
+  comments: '#69db7c',
+  buzz: '#fab005',
+  collects: '#20c997',
+  views: '#868e96'
 };
 
 // DOM Elements
@@ -229,6 +243,9 @@ function renderSummaryCards() {
   document.getElementById('totalLaughs').textContent = (latest.laughs || 0).toLocaleString();
   document.getElementById('totalCries').textContent = (latest.cries || 0).toLocaleString();
   document.getElementById('totalComments').textContent = (latest.comments || 0).toLocaleString();
+  document.getElementById('totalBuzz').textContent = (latest.buzz || 0).toLocaleString();
+  document.getElementById('totalCollects').textContent = (latest.collects || 0).toLocaleString();
+  document.getElementById('totalViews').textContent = (latest.views || 0).toLocaleString();
 }
 
 /**
@@ -402,6 +419,34 @@ function getChartData() {
     });
   }
 
+  if (visibleLines.buzz) {
+    datasets.push({
+      label: 'Buzz',
+      data: snapshots.map(s => s.buzz || 0),
+      borderColor: CHART_COLORS.buzz,
+      backgroundColor: CHART_COLORS.buzz + '20',
+      borderWidth: 2,
+      tension: 0.3,
+      fill: false,
+      pointRadius: snapshots.length > 50 ? 0 : 3,
+      pointHoverRadius: 5
+    });
+  }
+
+  if (visibleLines.collects) {
+    datasets.push({
+      label: 'Collects',
+      data: snapshots.map(s => s.collects || 0),
+      borderColor: CHART_COLORS.collects,
+      backgroundColor: CHART_COLORS.collects + '20',
+      borderWidth: 2,
+      tension: 0.3,
+      fill: false,
+      pointRadius: snapshots.length > 50 ? 0 : 3,
+      pointHoverRadius: 5
+    });
+  }
+
   return { labels, datasets };
 }
 
@@ -500,7 +545,7 @@ function setupImageChartListeners(images) {
 
       // Initialize visibility state if needed
       if (!imageVisibleLines.has(imageId)) {
-        imageVisibleLines.set(imageId, { total: true, likes: true, hearts: true, laughs: true, cries: true });
+        imageVisibleLines.set(imageId, { total: true, likes: true, hearts: true, laughs: true, cries: true, buzz: true, collects: true });
       }
 
       imageVisibleLines.get(imageId)[line] = checkbox.checked;
@@ -571,7 +616,7 @@ function renderImageChart(image, timeRange) {
   const labels = snapshots.map(s => formatChartDate(new Date(s.timestamp), timeRange));
 
   // Get per-image visibility (default all visible)
-  const vis = imageVisibleLines.get(image.id) || { total: true, likes: true, hearts: true, laughs: true, cries: true };
+  const vis = imageVisibleLines.get(image.id) || { total: true, likes: true, hearts: true, laughs: true, cries: true, buzz: true, collects: true };
 
   const datasets = [];
 
@@ -633,6 +678,32 @@ function renderImageChart(image, timeRange) {
       label: 'Cries',
       data: snapshots.map(s => s.cries || 0),
       borderColor: CHART_COLORS.cries,
+      borderWidth: 1.5,
+      tension: 0.3,
+      fill: false,
+      pointRadius: 0,
+      pointHoverRadius: 3
+    });
+  }
+
+  if (vis.buzz) {
+    datasets.push({
+      label: 'Buzz',
+      data: snapshots.map(s => s.buzz || 0),
+      borderColor: CHART_COLORS.buzz,
+      borderWidth: 1.5,
+      tension: 0.3,
+      fill: false,
+      pointRadius: 0,
+      pointHoverRadius: 3
+    });
+  }
+
+  if (vis.collects) {
+    datasets.push({
+      label: 'Collects',
+      data: snapshots.map(s => s.collects || 0),
+      borderColor: CHART_COLORS.collects,
       borderWidth: 1.5,
       tension: 0.3,
       fill: false,
@@ -739,7 +810,7 @@ function getCurrentStats(image) {
     return resolved[resolved.length - 1];
   }
   // Fallback to legacy format
-  return image.currentStats || { likes: 0, hearts: 0, laughs: 0, cries: 0, comments: 0 };
+  return image.currentStats || { likes: 0, hearts: 0, laughs: 0, cries: 0, comments: 0, buzz: 0, collects: 0, views: 0 };
 }
 
 /**
@@ -795,6 +866,18 @@ function createImageCard(image) {
               &#x1F4AC;
               ${formatNumber(stats.comments || 0)}
             </span>
+            <span class="stat-badge buzz">
+              &#x26A1;
+              ${formatNumber(stats.buzz || 0)}
+            </span>
+            <span class="stat-badge collects">
+              &#x1F516;
+              ${formatNumber(stats.collects || 0)}
+            </span>
+            <span class="stat-badge views">
+              &#x1F441;
+              ${formatNumber(stats.views || 0)}
+            </span>
           </div>
         </div>
       </div>
@@ -813,6 +896,8 @@ function createImageCard(image) {
               <label class="toggle-label"><input type="checkbox" data-line="hearts" data-image-id="${escapeHtml(image.id)}" checked><span class="toggle-dot hearts"></span>&#x2764;&#xFE0F;</label>
               <label class="toggle-label"><input type="checkbox" data-line="laughs" data-image-id="${escapeHtml(image.id)}" checked><span class="toggle-dot laughs"></span>&#x1F604;</label>
               <label class="toggle-label"><input type="checkbox" data-line="cries" data-image-id="${escapeHtml(image.id)}" checked><span class="toggle-dot cries"></span>&#x1F622;</label>
+              <label class="toggle-label"><input type="checkbox" data-line="buzz" data-image-id="${escapeHtml(image.id)}" checked><span class="toggle-dot buzz"></span>&#x26A1;</label>
+              <label class="toggle-label"><input type="checkbox" data-line="collects" data-image-id="${escapeHtml(image.id)}" checked><span class="toggle-dot collects"></span>&#x1F516;</label>
             </div>
             <div class="image-time-selector">
               <button class="image-time-btn" data-range="1d" data-image-id="${escapeHtml(image.id)}">1D</button>

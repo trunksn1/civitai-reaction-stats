@@ -24,6 +24,9 @@
   --color-cries: #748ffc;
   --color-comments: #69db7c;
   --color-total: #be4bdb;
+  --color-buzz: #fab005;
+  --color-collects: #20c997;
+  --color-views: #868e96;
 }
 
 body {
@@ -247,6 +250,21 @@ body {
   color: var(--color-comments);
 }
 
+.card-icon.buzz {
+  background-color: rgba(250, 176, 5, 0.15);
+  color: var(--color-buzz);
+}
+
+.card-icon.collects {
+  background-color: rgba(32, 201, 151, 0.15);
+  color: var(--color-collects);
+}
+
+.card-icon.views {
+  background-color: rgba(134, 142, 150, 0.15);
+  color: var(--color-views);
+}
+
 .card-content {
   display: flex;
   flex-direction: column;
@@ -354,6 +372,8 @@ body {
 .toggle-dot.hearts { background-color: var(--color-hearts); }
 .toggle-dot.laughs { background-color: var(--color-laughs); }
 .toggle-dot.cries { background-color: var(--color-cries); }
+.toggle-dot.buzz { background-color: var(--color-buzz); }
+.toggle-dot.collects { background-color: var(--color-collects); }
 
 .chart-container {
   position: relative;
@@ -510,6 +530,9 @@ body {
 .stat-badge.laughs svg { color: var(--color-laughs); }
 .stat-badge.cries svg { color: var(--color-cries); }
 .stat-badge.comments svg { color: var(--color-comments); }
+.stat-badge.buzz { color: var(--color-buzz); }
+.stat-badge.collects { color: var(--color-collects); }
+.stat-badge.views { color: var(--color-views); }
 
 /* Load More */
 .load-more-container {

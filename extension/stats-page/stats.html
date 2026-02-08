@@ -94,6 +94,33 @@
             <span class="card-label">Comments</span>
           </div>
         </div>
+        <div class="card summary-card" data-type="buzz">
+          <div class="card-icon buzz">
+            &#x26A1;
+          </div>
+          <div class="card-content">
+            <span class="card-value" id="totalBuzz">-</span>
+            <span class="card-label">Buzz</span>
+          </div>
+        </div>
+        <div class="card summary-card" data-type="collects">
+          <div class="card-icon collects">
+            &#x1F516;
+          </div>
+          <div class="card-content">
+            <span class="card-value" id="totalCollects">-</span>
+            <span class="card-label">Collects</span>
+          </div>
+        </div>
+        <div class="card summary-card" data-type="views">
+          <div class="card-icon views">
+            &#x1F441;
+          </div>
+          <div class="card-content">
+            <span class="card-value" id="totalViews">-</span>
+            <span class="card-label">Views</span>
+          </div>
+        </div>
       </section>
 
       <!-- Overview Chart -->
@@ -135,6 +162,16 @@
                 <span class="toggle-dot cries"></span>
                 &#x1F622;
               </label>
+              <label class="toggle-label">
+                <input type="checkbox" data-line="buzz" checked>
+                <span class="toggle-dot buzz"></span>
+                &#x26A1;
+              </label>
+              <label class="toggle-label">
+                <input type="checkbox" data-line="collects" checked>
+                <span class="toggle-dot collects"></span>
+                &#x1F516;
+              </label>
             </div>
           </div>
         </div>
@@ -161,6 +198,9 @@
               <option value="hearts">❤️ Hearts</option>
               <option value="laughs">😄 Laughs</option>
               <option value="cries">😢 Cries</option>
+              <option value="buzz">⚡ Buzz</option>
+              <option value="collects">🔖 Collects</option>
+              <option value="views">👁 Views</option>
             </select>
           </div>
         </div>
