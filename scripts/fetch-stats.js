@@ -497,7 +497,7 @@ function applyRetentionPolicy(snapshots) {
  */
 function isDelta(snapshot) {
   return snapshot && ('dl' in snapshot || 'dh' in snapshot ||
-         'dla' in snapshot || 'dc' in snapshot || 'dco' in snapshot);
+         'dla' in snapshot || 'dc' in snapshot || 'dco' in snapshot || '_d' in snapshot);
 }
 
 /**
@@ -581,6 +581,10 @@ function encodeAsDeltas(absoluteSnapshots) {
     if (curr.laughs - prev.laughs) delta.dla = curr.laughs - prev.laughs;
     if (curr.cries - prev.cries) delta.dc = curr.cries - prev.cries;
     if (curr.comments - prev.comments) delta.dco = curr.comments - prev.comments;
+    // Mark as delta even when all changes are zero, so resolvers don't mistake it for absolute
+    if (!delta.dl && !delta.dh && !delta.dla && !delta.dc && !delta.dco) {
+      delta._d = 1;
+    }
     result.push(delta);
   }
   return result;
@@ -762,6 +766,9 @@ async function main() {
       if (totalSnapshot.laughs - prevTotal.laughs) delta.dla = totalSnapshot.laughs - prevTotal.laughs;
       if (totalSnapshot.cries - prevTotal.cries) delta.dc = totalSnapshot.cries - prevTotal.cries;
       if (totalSnapshot.comments - prevTotal.comments) delta.dco = totalSnapshot.comments - prevTotal.comments;
+      if (!delta.dl && !delta.dh && !delta.dla && !delta.dc && !delta.dco) {
+        delta._d = 1;
+      }
       existingData.totalSnapshots.push(delta);
     } else {
       existingData.totalSnapshots.push(totalSnapshot);

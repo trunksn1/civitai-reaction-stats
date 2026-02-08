@@ -42,7 +42,7 @@ function resolveSnapshots(snapshots) {
   let current = { likes: 0, hearts: 0, laughs: 0, cries: 0, comments: 0 };
 
   for (const s of snapshots) {
-    if ('dl' in s || 'dh' in s || 'dla' in s || 'dc' in s || 'dco' in s) {
+    if ('dl' in s || 'dh' in s || 'dla' in s || 'dc' in s || 'dco' in s || '_d' in s) {
       current = {
         likes: current.likes + (s.dl || 0),
         hearts: current.hearts + (s.dh || 0),
