@@ -1,8 +1,0 @@
-﻿2026-02-08T15:58:15.2032961Z ##[group]Run cd scripts && npm ci
-2026-02-08T15:58:15.2033367Z [36;1mcd scripts && npm ci[0m
-2026-02-08T15:58:15.2075501Z shell: /usr/bin/bash -e {0}
-2026-02-08T15:58:15.2075818Z ##[endgroup]
-2026-02-08T15:58:16.0165783Z 
-2026-02-08T15:58:16.0182675Z added 17 packages, and audited 18 packages in 746ms
-2026-02-08T15:58:16.0183277Z 
-2026-02-08T15:58:16.0183696Z found 0 vulnerabilities

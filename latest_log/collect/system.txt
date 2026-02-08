@@ -1,8 +1,0 @@
-2026-02-08T20:04:20.1170000Z Job is about to start running on the hosted runner: GitHub Actions 1000000053
-2026-02-08T20:04:20.1180000Z Job is waiting for a hosted runner to come online.
-2026-02-08T20:04:20.1140000Z Evaluating collect.if
-2026-02-08T20:04:20.1140000Z Evaluating: success()
-2026-02-08T20:04:20.1140000Z Result: true
-2026-02-08T20:04:20.1140000Z Requested labels: ubuntu-latest
-2026-02-08T20:04:20.1140000Z Job defined at: trunksn1/civitai-reaction-stats/.github/workflows/collect-stats.yml@refs/heads/main
-2026-02-08T20:04:20.1140000Z Waiting for a runner to pick up this job...

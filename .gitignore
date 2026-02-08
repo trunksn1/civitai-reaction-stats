@@ -1,0 +1,8 @@
+node_modules/
+.claude/
+collect/
+latest_log/
+old/
+*.txt
+stats.json
+PLAN.md
