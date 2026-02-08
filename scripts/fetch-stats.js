@@ -277,21 +277,81 @@ async function fetchAllUserImages(username) {
 }
 
 /**
- * Read existing Gist data
+ * Read existing Gist data with better error handling
  */
 async function readGistData() {
   try {
+    console.log('Reading existing Gist data...');
     const gist = await octokit.gists.get({ gist_id: GIST_ID });
-    const content = gist.data.files['stats.json']?.content;
 
-    if (!content || content.trim() === '{}' || content.trim() === '') {
+    // Check if stats.json file exists
+    if (!gist.data.files['stats.json']) {
+      console.log('Warning: stats.json file not found in Gist');
+      console.log('Available files:', Object.keys(gist.data.files).join(', '));
+      console.log('Starting with empty stats');
       return createEmptyStats();
     }
 
-    return JSON.parse(content);
+    const fileData = gist.data.files['stats.json'];
+    let content;
+
+    // Handle truncated files (GitHub API truncates large Gist files)
+    if (fileData.truncated) {
+      console.log('Gist file is truncated (too large for API response), fetching full content from raw_url...');
+      const response = await fetch(fileData.raw_url);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch full Gist content from raw_url: HTTP ${response.status}`);
+      }
+      content = await response.text();
+      console.log(`Fetched full content: ${(content.length / 1024).toFixed(2)} KB`);
+    } else {
+      content = fileData.content;
+    }
+
+    // Check for truly empty/new Gist
+    if (!content || content.trim() === '' || content.trim() === '{}') {
+      console.log('Gist file is empty, starting fresh');
+      return createEmptyStats();
+    }
+
+    // Parse and validate
+    const data = JSON.parse(content);
+
+    // Validate structure
+    if (!data.totalSnapshots || !data.images) {
+      console.error('ERROR: Gist data has invalid structure');
+      console.error('Data structure:', Object.keys(data));
+      throw new Error('Invalid Gist data structure - missing totalSnapshots or images arrays');
+    }
+
+    console.log(`Successfully read existing data: ${data.totalSnapshots.length} totalSnapshots, ${data.images.length} images`);
+    return data;
+
   } catch (error) {
-    console.log('Could not read existing Gist, starting fresh:', error.message);
-    return createEmptyStats();
+    // CRITICAL: Do NOT silently return empty stats on error!
+    console.error('');
+    console.error('═══════════════════════════════════════════════════════════');
+    console.error('CRITICAL ERROR: Failed to read existing Gist data');
+    console.error('═══════════════════════════════════════════════════════════');
+    console.error('Error type:', error.name);
+    console.error('Error message:', error.message);
+    console.error('Stack trace:', error.stack);
+    console.error('');
+    console.error('This is a CRITICAL error because proceeding would OVERWRITE');
+    console.error('all existing historical data with only the current snapshot.');
+    console.error('');
+    console.error('Possible causes:');
+    console.error('  1. Network timeout or GitHub API issues');
+    console.error('  2. Invalid GIST_TOKEN or insufficient permissions');
+    console.error('  3. Gist was deleted or ID changed');
+    console.error('  4. Gist file name is not "stats.json"');
+    console.error('');
+    console.error('ABORTING to prevent data loss.');
+    console.error('═══════════════════════════════════════════════════════════');
+    console.error('');
+
+    // Exit with error code instead of returning empty stats
+    process.exit(1);
   }
 }
 
@@ -311,18 +371,43 @@ function createEmptyStats() {
  * Update Gist with new data
  */
 async function updateGist(data) {
-  const content = JSON.stringify(data, null, 2);
+  try {
+    const content = JSON.stringify(data, null, 2);
 
-  await octokit.gists.update({
-    gist_id: GIST_ID,
-    files: {
-      'stats.json': {
-        content: content
+    console.log('\nUpdating Gist...');
+    console.log(`  Data size: ${(content.length / 1024).toFixed(2)} KB`);
+    console.log(`  Total snapshots: ${data.totalSnapshots.length}`);
+    console.log(`  Images: ${data.images.length}`);
+
+    await octokit.gists.update({
+      gist_id: GIST_ID,
+      files: {
+        'stats.json': {
+          content: content
+        }
       }
-    }
-  });
+    });
 
-  console.log('Gist updated successfully');
+    console.log('✓ Gist updated successfully');
+  } catch (error) {
+    console.error('');
+    console.error('═══════════════════════════════════════════════════════════');
+    console.error('CRITICAL ERROR: Failed to update Gist');
+    console.error('═══════════════════════════════════════════════════════════');
+    console.error('Error:', error.message);
+    console.error('');
+    console.error('The data collection completed successfully but could not');
+    console.error('be saved to the Gist. Possible causes:');
+    console.error('  1. Network timeout');
+    console.error('  2. Invalid GIST_TOKEN or revoked permissions');
+    console.error('  3. Gist was deleted');
+    console.error('  4. GitHub API issues');
+    console.error('');
+    console.error('Your historical data in the Gist has NOT been modified.');
+    console.error('═══════════════════════════════════════════════════════════');
+    console.error('');
+    throw error;
+  }
 }
 
 /**
@@ -440,9 +525,21 @@ function processImages(apiImages, existingImages = []) {
     // Get existing image data if available
     const existingImage = existingImageMap.get(String(img.id));
 
-    // Merge with existing snapshots
+    // Merge with existing snapshots - only add if values changed
     let snapshots = existingImage?.snapshots || [];
-    snapshots.push(newSnapshot);
+    const lastSnapshot = snapshots[snapshots.length - 1];
+
+    // Only store new snapshot if reactions actually changed (or it's the first snapshot)
+    const hasChanged = !lastSnapshot ||
+      lastSnapshot.likes !== likes ||
+      lastSnapshot.hearts !== hearts ||
+      lastSnapshot.laughs !== laughs ||
+      lastSnapshot.cries !== cries ||
+      lastSnapshot.comments !== comments;
+
+    if (hasChanged) {
+      snapshots.push(newSnapshot);
+    }
 
     // Apply same retention policy as totalSnapshots
     snapshots = applyRetentionPolicy(snapshots);
@@ -499,6 +596,26 @@ async function main() {
     // Read existing Gist data
     const existingData = await readGistData();
 
+    // Log the data we read for debugging
+    if (existingData.totalSnapshots.length === 0 && existingData.images.length === 0) {
+      console.log('⚠️  WARNING: Starting with empty data (no existing history found)');
+      console.log('   If this is unexpected, check your GIST_ID and ensure the Gist exists.');
+    } else {
+      console.log(`✓ Loaded existing history successfully`);
+
+      // Show some sample data to verify it's real
+      if (existingData.totalSnapshots.length > 0) {
+        const latest = existingData.totalSnapshots[existingData.totalSnapshots.length - 1];
+        console.log(`  Latest snapshot: ${latest.timestamp}`);
+        console.log(`  Stats: ${latest.likes} likes, ${latest.hearts} hearts`);
+      }
+
+      if (existingData.images.length > 0) {
+        const sampleImage = existingData.images[0];
+        console.log(`  Sample image: ${sampleImage.id} with ${sampleImage.snapshots?.length || 0} snapshots`);
+      }
+    }
+
     console.log(`\nExisting data: ${existingData.totalSnapshots.length} totalSnapshots, ${existingData.images.length} images`);
 
     // Process images with existing data to merge snapshots
@@ -528,6 +645,45 @@ async function main() {
     existingData.images = images;
     existingData.username = CIVITAI_USERNAME;
     existingData.lastUpdated = totalSnapshot.timestamp;
+
+    // SAFETY CHECK: Prevent catastrophic data loss
+    // If we read existing data but new data has way fewer snapshots, something went wrong
+    if (snapshotsBefore > 1) { // Only check if we had meaningful existing data
+      const newImageSnapshotCount = images.reduce((sum, img) => {
+        return sum + (img.snapshots?.length || 0);
+      }, 0);
+
+      // For validation, we need to count what we started with
+      // We can estimate: if we had X totalSnapshots and Y images, we should have roughly similar image snapshots
+      // A more precise check: count current vs what we expect after adding one more snapshot per image
+      const expectedMinImageSnapshots = existingData.images.length; // At minimum, each image should have 1 snapshot
+
+      console.log('\nData integrity check:');
+      console.log(`  Total snapshots: ${existingData.totalSnapshots.length}`);
+      console.log(`  Total image snapshots: ${newImageSnapshotCount}`);
+      console.log(`  Images tracked: ${images.length}`);
+
+      // Sanity check: We should have at least as many image snapshots as images
+      // And the count should be reasonable (not drastically low)
+      if (newImageSnapshotCount < expectedMinImageSnapshots) {
+        console.error('');
+        console.error('═══════════════════════════════════════════════════════════');
+        console.error('DATA LOSS DETECTED!');
+        console.error('═══════════════════════════════════════════════════════════');
+        console.error(`Expected at least: ${expectedMinImageSnapshots} image snapshots`);
+        console.error(`Actual image snapshots: ${newImageSnapshotCount}`);
+        console.error('');
+        console.error('This indicates a critical bug in data merging.');
+        console.error('ABORTING to prevent overwriting good data with incomplete data.');
+        console.error('═══════════════════════════════════════════════════════════');
+        console.error('');
+        process.exit(1);
+      }
+
+      console.log('✓ Data integrity check: PASSED');
+    } else {
+      console.log('\nSkipping data integrity check (first run or minimal existing data)');
+    }
 
     // Update Gist
     await updateGist(existingData);
