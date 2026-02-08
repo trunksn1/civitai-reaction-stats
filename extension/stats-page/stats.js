@@ -21,6 +21,15 @@ const IMAGES_PER_PAGE = 10;
 const imageCharts = new Map(); // Map<imageId, Chart>
 const imageTimeRanges = new Map(); // Map<imageId, timeRange>
 
+// Emoji labels for chart tooltips
+const LABEL_EMOJI = {
+  'Total': '\u{1F310}',      // 🌐
+  'Likes': '\u{1F44D}',      // 👍
+  'Hearts': '\u2764\uFE0F',  // ❤️
+  'Laughs': '\u{1F604}',     // 😄
+  'Cries': '\u{1F622}'       // 😢
+};
+
 // Colors matching Civitai's palette
 const CHART_COLORS = {
   total: '#be4bdb',
@@ -217,7 +226,18 @@ function renderChart() {
           displayColors: true,
           callbacks: {
             label: function(context) {
-              return `${context.dataset.label}: ${formatNumber(context.parsed.y)}`;
+              const emoji = LABEL_EMOJI[context.dataset.label] || context.dataset.label;
+              const value = context.parsed.y.toLocaleString();
+              const idx = context.dataIndex;
+              let delta = '';
+              if (idx > 0) {
+                const prev = context.dataset.data[idx - 1];
+                const diff = context.parsed.y - prev;
+                if (diff !== 0) {
+                  delta = ` (${diff >= 0 ? '+' : ''}${diff.toLocaleString()})`;
+                }
+              }
+              return `${emoji}: ${value}${delta}`;
             }
           }
         }
@@ -544,7 +564,18 @@ function renderImageChart(image, timeRange) {
           displayColors: true,
           callbacks: {
             label: function(context) {
-              return `${context.dataset.label}: ${formatNumber(context.parsed.y)}`;
+              const emoji = LABEL_EMOJI[context.dataset.label] || context.dataset.label;
+              const value = context.parsed.y.toLocaleString();
+              const idx = context.dataIndex;
+              let delta = '';
+              if (idx > 0) {
+                const prev = context.dataset.data[idx - 1];
+                const diff = context.parsed.y - prev;
+                if (diff !== 0) {
+                  delta = ` (${diff >= 0 ? '+' : ''}${diff.toLocaleString()})`;
+                }
+              }
+              return `${emoji}: ${value}${delta}`;
             }
           }
         }
