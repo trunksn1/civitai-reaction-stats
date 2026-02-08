@@ -219,6 +219,7 @@ body {
   border-radius: 8px;
   background-color: rgba(190, 75, 219, 0.15);
   color: var(--color-total);
+  font-size: 28px;
 }
 
 .card-icon.likes {
