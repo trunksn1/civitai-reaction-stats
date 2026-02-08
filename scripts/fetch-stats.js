@@ -28,6 +28,8 @@ const CIVITAI_API_BASE = 'https://civitai.com/api/v1';
 const IMAGES_PER_PAGE = 200;
 const MAX_RETRIES = 3;
 const INITIAL_BACKOFF_MS = 1000;
+const STATS_FETCH_DELAY_MS = 300; // Delay between individual image stats fetches
+const STATS_BATCH_SIZE = 5; // Number of concurrent stats fetches
 
 // Data retention thresholds
 const HOURLY_RETENTION_DAYS = 7;
@@ -76,6 +78,88 @@ function sleep(ms) {
 }
 
 /**
+ * Fetch stats for a single image by ID
+ * The public API only returns accurate stats when querying by imageId
+ */
+async function fetchImageStats(imageId) {
+  const url = `${CIVITAI_API_BASE}/images?imageId=${imageId}`;
+  try {
+    const data = await fetchWithRetry(url);
+    if (data.items && data.items.length > 0) {
+      return data.items[0].stats || null;
+    }
+  } catch (error) {
+    console.log(`  Warning: Failed to fetch stats for image ${imageId}: ${error.message}`);
+  }
+  return null;
+}
+
+/**
+ * Fetch accurate stats for images that have 0 reactions in bulk response
+ * The Civitai public API only returns accurate stats when querying by imageId
+ */
+async function fetchMissingStats(images) {
+  const zeroStatsImages = images.filter(img => {
+    const total = (img.stats?.likeCount || 0) + (img.stats?.heartCount || 0) +
+                  (img.stats?.laughCount || 0) + (img.stats?.cryCount || 0);
+    return total === 0;
+  });
+
+  if (zeroStatsImages.length === 0) {
+    console.log('\nAll images already have stats from bulk fetch.');
+    return images;
+  }
+
+  console.log(`\nFetching individual stats for ${zeroStatsImages.length} images with 0 reactions...`);
+  console.log(`(Civitai API only returns accurate stats when querying by imageId)`);
+
+  let updated = 0;
+  let stillZero = 0;
+
+  // Process in batches to avoid overwhelming the API
+  for (let i = 0; i < zeroStatsImages.length; i += STATS_BATCH_SIZE) {
+    const batch = zeroStatsImages.slice(i, i + STATS_BATCH_SIZE);
+
+    const results = await Promise.all(
+      batch.map(img => fetchImageStats(img.id))
+    );
+
+    for (let j = 0; j < batch.length; j++) {
+      const stats = results[j];
+      if (stats) {
+        batch[j].stats = stats;
+        const total = (stats.likeCount || 0) + (stats.heartCount || 0) +
+                      (stats.laughCount || 0) + (stats.cryCount || 0);
+        if (total > 0) {
+          updated++;
+        } else {
+          stillZero++;
+        }
+      } else {
+        stillZero++;
+      }
+    }
+
+    // Progress update every 50 images
+    const processed = Math.min(i + STATS_BATCH_SIZE, zeroStatsImages.length);
+    if (processed % 50 === 0 || processed === zeroStatsImages.length) {
+      console.log(`  Progress: ${processed}/${zeroStatsImages.length} (${updated} updated with stats)`);
+    }
+
+    // Delay between batches
+    if (i + STATS_BATCH_SIZE < zeroStatsImages.length) {
+      await sleep(STATS_FETCH_DELAY_MS);
+    }
+  }
+
+  console.log(`\nIndividual stats fetch complete:`);
+  console.log(`  Updated with real stats: ${updated}`);
+  console.log(`  Still 0 reactions (genuinely no reactions): ${stillZero}`);
+
+  return images;
+}
+
+/**
  * Fetch all images for a user, paginating through all results
  */
 async function fetchAllUserImages(username) {
@@ -89,26 +173,13 @@ async function fetchAllUserImages(username) {
   while (nextPage) {
     pageCount++;
     console.log(`Fetching page ${pageCount}...`);
-    console.log(`  URL: ${nextPage}`);
 
     const data = await fetchWithRetry(nextPage);
 
     if (data.items && data.items.length > 0) {
       allImages.push(...data.items);
       console.log(`  Retrieved ${data.items.length} images (total: ${allImages.length})`);
-
-      // Log first image stats to verify API response includes stats
-      if (pageCount === 1 && data.items[0]) {
-        const first = data.items[0];
-        console.log(`  Sample image from API response:`);
-        console.log(`    ID: ${first.id}`);
-        console.log(`    Stats: likes=${first.stats?.likeCount}, hearts=${first.stats?.heartCount}, laughs=${first.stats?.laughCount}, cries=${first.stats?.cryCount}`);
-        console.log(`    Created: ${first.createdAt}`);
-      }
     }
-
-    // Log metadata to understand pagination
-    console.log(`  Metadata: cursor=${data.metadata?.nextCursor || 'none'}, hasNextPage=${data.metadata?.nextPage ? 'yes' : 'no'}`);
 
     nextPage = data.metadata?.nextPage || null;
 
@@ -118,48 +189,34 @@ async function fetchAllUserImages(username) {
     }
   }
 
-  // Log oldest image date to check if 2023 images are included
-  if (allImages.length > 0) {
-    const oldest = allImages.reduce((a, b) =>
-      new Date(a.createdAt) < new Date(b.createdAt) ? a : b
-    );
-    const newest = allImages.reduce((a, b) =>
-      new Date(a.createdAt) > new Date(b.createdAt) ? a : b
-    );
-    console.log(`\nDate range of fetched images:`);
-    console.log(`  Oldest: ID ${oldest.id} from ${oldest.createdAt}`);
-    console.log(`  Newest: ID ${newest.id} from ${newest.createdAt}`);
+  // Filter out unpublished/scheduled images (future dates)
+  const now = new Date();
+  const publishedImages = allImages.filter(img => new Date(img.createdAt) <= now);
+  const scheduledCount = allImages.length - publishedImages.length;
 
-    // Count images with zero stats vs images with stats
-    let zeroStatsCount = 0;
-    let hasStatsCount = 0;
-    for (const img of allImages) {
-      const total = (img.stats?.likeCount || 0) + (img.stats?.heartCount || 0) +
-                    (img.stats?.laughCount || 0) + (img.stats?.cryCount || 0);
-      if (total === 0) {
-        zeroStatsCount++;
-      } else {
-        hasStatsCount++;
-      }
-    }
-    console.log(`\nStats analysis:`);
-    console.log(`  Images with reactions: ${hasStatsCount}`);
-    console.log(`  Images with 0 reactions: ${zeroStatsCount}`);
-
-    // Show a sample of images with stats to verify API is working
-    const withStats = allImages.filter(img =>
-      (img.stats?.likeCount || 0) + (img.stats?.heartCount || 0) > 0
-    ).slice(0, 3);
-    if (withStats.length > 0) {
-      console.log(`\nSample images WITH stats:`);
-      for (const img of withStats) {
-        console.log(`  ID ${img.id}: likes=${img.stats?.likeCount}, hearts=${img.stats?.heartCount} (created: ${img.createdAt})`);
-      }
-    }
+  if (scheduledCount > 0) {
+    console.log(`\nFiltered out ${scheduledCount} unpublished/scheduled images (future dates)`);
   }
 
-  console.log(`\nTotal images fetched: ${allImages.length}`);
-  return allImages;
+  // Count images with zero stats from bulk response
+  let zeroStatsCount = 0;
+  let hasStatsCount = 0;
+  for (const img of publishedImages) {
+    const total = (img.stats?.likeCount || 0) + (img.stats?.heartCount || 0) +
+                  (img.stats?.laughCount || 0) + (img.stats?.cryCount || 0);
+    if (total === 0) {
+      zeroStatsCount++;
+    } else {
+      hasStatsCount++;
+    }
+  }
+  console.log(`\nBulk fetch stats: ${hasStatsCount} with reactions, ${zeroStatsCount} with 0 reactions`);
+
+  // Re-fetch accurate stats for images with 0 reactions
+  const imagesWithStats = await fetchMissingStats(publishedImages);
+
+  console.log(`\nTotal published images: ${imagesWithStats.length}`);
+  return imagesWithStats;
 }
 
 /**
