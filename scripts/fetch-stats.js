@@ -82,8 +82,10 @@ function sleep(ms) {
  * Fetch stats for a single image by ID
  * The public API only returns accurate stats when querying by imageId
  */
-async function fetchImageStats(imageId) {
-  const url = `${CIVITAI_API_BASE}/images?imageId=${imageId}`;
+async function fetchImageStats(imageId, nsfwLevel) {
+  // Must pass the matching nsfw param or the API won't return NSFW images
+  const nsfwParam = nsfwLevel && nsfwLevel !== 'None' ? `&nsfw=${nsfwLevel}` : '';
+  const url = `${CIVITAI_API_BASE}/images?imageId=${imageId}${nsfwParam}`;
   try {
     const data = await fetchWithRetry(url);
     if (data.items && data.items.length > 0) {
@@ -176,7 +178,7 @@ async function refreshImageStats(images) {
     const batch = refreshList.slice(i, i + STATS_BATCH_SIZE);
 
     const results = await Promise.all(
-      batch.map(img => fetchImageStats(img.id))
+      batch.map(img => fetchImageStats(img.id, img.nsfwLevel))
     );
 
     for (let j = 0; j < batch.length; j++) {
