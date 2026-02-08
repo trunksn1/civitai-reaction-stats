@@ -182,11 +182,21 @@ async function refreshImageStats(images) {
     for (let j = 0; j < batch.length; j++) {
       const stats = results[j];
       if (stats) {
-        const oldTotal = (batch[j].stats?.likeCount || 0) + (batch[j].stats?.heartCount || 0) +
-                         (batch[j].stats?.laughCount || 0) + (batch[j].stats?.cryCount || 0);
-        batch[j].stats = stats;
-        const newTotal = (stats.likeCount || 0) + (stats.heartCount || 0) +
-                         (stats.laughCount || 0) + (stats.cryCount || 0);
+        const bulkStats = batch[j].stats || {};
+        // Keep the higher value for each field — individual refresh should
+        // correct understated bulk stats, not overwrite with stale/lower values
+        const mergedStats = {
+          likeCount: Math.max(stats.likeCount || 0, bulkStats.likeCount || 0),
+          heartCount: Math.max(stats.heartCount || 0, bulkStats.heartCount || 0),
+          laughCount: Math.max(stats.laughCount || 0, bulkStats.laughCount || 0),
+          cryCount: Math.max(stats.cryCount || 0, bulkStats.cryCount || 0),
+          commentCount: Math.max(stats.commentCount || 0, bulkStats.commentCount || 0),
+        };
+        const oldTotal = (bulkStats.likeCount || 0) + (bulkStats.heartCount || 0) +
+                         (bulkStats.laughCount || 0) + (bulkStats.cryCount || 0);
+        const newTotal = (mergedStats.likeCount || 0) + (mergedStats.heartCount || 0) +
+                         (mergedStats.laughCount || 0) + (mergedStats.cryCount || 0);
+        batch[j].stats = mergedStats;
         if (newTotal !== oldTotal) {
           updated++;
         } else {
