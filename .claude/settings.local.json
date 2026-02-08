@@ -13,7 +13,11 @@
       "Bash(node -e:*)",
       "Bash(dir:*)",
       "WebFetch(domain:wiki.civitai.com)",
-      "WebFetch(domain:feedback.civitai.com)"
+      "WebFetch(domain:feedback.civitai.com)",
+      "Bash(comm:*)",
+      "Bash(while read:*)",
+      "Bash(do grep \"\"\"id\"\": \"\"$id\"\"\" -A 2 \"E:\\\\Clouding\\\\Dropbox\\\\INFORMATICA\\\\GitHub\\\\Civitai Reaction Stats\\\\stats.json good.txt\")",
+      "Bash(done)"
     ]
   }
 }

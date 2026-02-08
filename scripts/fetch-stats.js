@@ -227,25 +227,22 @@ async function refreshImageStats(images) {
 }
 
 /**
- * Fetch all images for a user, paginating through all results
+ * Fetch all pages from a paginated API URL
  */
-async function fetchAllUserImages(username) {
-  const allImages = [];
-  // Use period=AllTime to ensure we get all historical images
-  let nextPage = `${CIVITAI_API_BASE}/images?username=${encodeURIComponent(username)}&limit=${IMAGES_PER_PAGE}&sort=Newest&period=AllTime&nsfw=true`;
+async function fetchAllPages(startUrl, label) {
+  const allItems = [];
+  let nextPage = startUrl;
   let pageCount = 0;
-
-  console.log(`Fetching images for user: ${username}`);
 
   while (nextPage) {
     pageCount++;
-    console.log(`Fetching page ${pageCount}...`);
+    console.log(`  [${label}] Fetching page ${pageCount}...`);
 
     const data = await fetchWithRetry(nextPage);
 
     if (data.items && data.items.length > 0) {
-      allImages.push(...data.items);
-      console.log(`  Retrieved ${data.items.length} images (total: ${allImages.length})`);
+      allItems.push(...data.items);
+      console.log(`    Retrieved ${data.items.length} images (total: ${allItems.length})`);
     }
 
     nextPage = data.metadata?.nextPage || null;
@@ -255,6 +252,31 @@ async function fetchAllUserImages(username) {
       await sleep(500);
     }
   }
+
+  return allItems;
+}
+
+/**
+ * Fetch all images for a user, paginating through all results.
+ * Makes two passes (SFW + NSFW) because the Civitai API doesn't return all images in one call.
+ * See: https://github.com/civitai/civitai/issues/1277
+ */
+async function fetchAllUserImages(username) {
+  const baseUrl = `${CIVITAI_API_BASE}/images?username=${encodeURIComponent(username)}&limit=${IMAGES_PER_PAGE}&sort=Newest&period=AllTime`;
+
+  // Two passes: SFW (default) + NSFW-only, because the API doesn't reliably return all in one call
+  console.log(`Fetching images for user: ${username}`);
+
+  const sfwImages = await fetchAllPages(baseUrl, 'SFW');
+  const nsfwImages = await fetchAllPages(`${baseUrl}&nsfw=true`, 'NSFW');
+
+  // Merge and deduplicate by image ID
+  const imageMap = new Map();
+  for (const img of [...sfwImages, ...nsfwImages]) {
+    imageMap.set(img.id, img);
+  }
+  const allImages = Array.from(imageMap.values());
+  console.log(`\nCombined: ${sfwImages.length} SFW + ${nsfwImages.length} NSFW = ${allImages.length} unique images`);
 
   // Filter out unpublished/scheduled images (future dates)
   const now = new Date();
