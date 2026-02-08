@@ -79,17 +79,44 @@ function sleep(ms) {
 }
 
 /**
- * Fetch stats for a single image by ID
- * The public API only returns accurate stats when querying by imageId
+ * Fetch stats for a single image by ID using the tRPC API.
+ * The tRPC endpoint returns additional fields (buzz, collects, views)
+ * that the public REST API does not expose.
  */
 async function fetchImageStats(imageId, nsfwLevel) {
-  // Must pass the matching nsfw param or the API won't return NSFW images
-  const nsfwParam = nsfwLevel && nsfwLevel !== 'None' ? `&nsfw=${nsfwLevel}` : '';
-  const url = `${CIVITAI_API_BASE}/images?imageId=${imageId}${nsfwParam}`;
+  // Map NSFW level names to the numeric browsingLevel bitmask used by tRPC
+  const nsfwLevelMap = { 'None': 1, 'Soft': 2, 'Mature': 4, 'X': 8 };
+  const browsingLevel = nsfwLevelMap[nsfwLevel] || 1;
+  const input = {
+    json: {
+      limit: 1,
+      cursor: undefined,
+      browsingLevel,
+      useIndex: true,
+      imageId: Number(imageId),
+      period: "AllTime",
+      sort: "Newest",
+      types: ["image"],
+      withMeta: false,
+      pending: false
+    }
+  };
+  const url = `https://civitai.com/api/trpc/image.getInfinite?input=${encodeURIComponent(JSON.stringify(input))}`;
   try {
     const data = await fetchWithRetry(url);
-    if (data.items && data.items.length > 0) {
-      return data.items[0].stats || null;
+    const item = data?.result?.data?.json?.items?.[0];
+    if (item && item.stats) {
+      const s = item.stats;
+      return {
+        likeCount: s.likeCountAllTime || 0,
+        heartCount: s.heartCountAllTime || 0,
+        laughCount: s.laughCountAllTime || 0,
+        cryCount: s.cryCountAllTime || 0,
+        commentCount: s.commentCountAllTime || 0,
+        buzzCount: s.tippedAmountCountAllTime || 0,
+        collectCount: s.collectedCountAllTime || 0,
+        viewCount: s.viewCountAllTime || 0
+      };
     }
   } catch (error) {
     console.log(`  Warning: Failed to fetch stats for image ${imageId}: ${error.message}`);
@@ -193,6 +220,9 @@ async function refreshImageStats(images) {
           laughCount: Math.max(stats.laughCount || 0, bulkStats.laughCount || 0),
           cryCount: Math.max(stats.cryCount || 0, bulkStats.cryCount || 0),
           commentCount: Math.max(stats.commentCount || 0, bulkStats.commentCount || 0),
+          buzzCount: Math.max(stats.buzzCount || 0, bulkStats.buzzCount || 0),
+          collectCount: Math.max(stats.collectCount || 0, bulkStats.collectCount || 0),
+          viewCount: Math.max(stats.viewCount || 0, bulkStats.viewCount || 0),
         };
         const oldTotal = (bulkStats.likeCount || 0) + (bulkStats.heartCount || 0) +
                          (bulkStats.laughCount || 0) + (bulkStats.cryCount || 0);
@@ -536,7 +566,8 @@ function applyRetentionPolicy(snapshots) {
  */
 function isDelta(snapshot) {
   return snapshot && ('dl' in snapshot || 'dh' in snapshot ||
-         'dla' in snapshot || 'dc' in snapshot || 'dco' in snapshot || '_d' in snapshot);
+         'dla' in snapshot || 'dc' in snapshot || 'dco' in snapshot ||
+         'dbu' in snapshot || 'dcol' in snapshot || 'dvi' in snapshot || '_d' in snapshot);
 }
 
 /**
@@ -544,7 +575,7 @@ function isDelta(snapshot) {
  * by walking backward to find the nearest absolute snapshot and applying deltas forward
  */
 function resolveSnapshot(snapshots, index) {
-  let base = { likes: 0, hearts: 0, laughs: 0, cries: 0, comments: 0 };
+  let base = { likes: 0, hearts: 0, laughs: 0, cries: 0, comments: 0, buzz: 0, collects: 0, views: 0 };
   let startIdx = 0;
 
   for (let i = index; i >= 0; i--) {
@@ -554,7 +585,10 @@ function resolveSnapshot(snapshots, index) {
         hearts: snapshots[i].hearts || 0,
         laughs: snapshots[i].laughs || 0,
         cries: snapshots[i].cries || 0,
-        comments: snapshots[i].comments || 0
+        comments: snapshots[i].comments || 0,
+        buzz: snapshots[i].buzz || 0,
+        collects: snapshots[i].collects || 0,
+        views: snapshots[i].views || 0
       };
       startIdx = i + 1;
       break;
@@ -569,6 +603,9 @@ function resolveSnapshot(snapshots, index) {
       base.laughs += s.dla || 0;
       base.cries += s.dc || 0;
       base.comments += s.dco || 0;
+      base.buzz += s.dbu || 0;
+      base.collects += s.dcol || 0;
+      base.views += s.dvi || 0;
     }
   }
 
@@ -580,7 +617,7 @@ function resolveSnapshot(snapshots, index) {
  */
 function resolveAllSnapshots(snapshots) {
   const result = [];
-  let current = { likes: 0, hearts: 0, laughs: 0, cries: 0, comments: 0 };
+  let current = { likes: 0, hearts: 0, laughs: 0, cries: 0, comments: 0, buzz: 0, collects: 0, views: 0 };
 
   for (const s of snapshots) {
     if (isDelta(s)) {
@@ -589,7 +626,10 @@ function resolveAllSnapshots(snapshots) {
         hearts: current.hearts + (s.dh || 0),
         laughs: current.laughs + (s.dla || 0),
         cries: current.cries + (s.dc || 0),
-        comments: current.comments + (s.dco || 0)
+        comments: current.comments + (s.dco || 0),
+        buzz: current.buzz + (s.dbu || 0),
+        collects: current.collects + (s.dcol || 0),
+        views: current.views + (s.dvi || 0)
       };
     } else {
       current = {
@@ -597,7 +637,10 @@ function resolveAllSnapshots(snapshots) {
         hearts: s.hearts || 0,
         laughs: s.laughs || 0,
         cries: s.cries || 0,
-        comments: s.comments || 0
+        comments: s.comments || 0,
+        buzz: s.buzz || 0,
+        collects: s.collects || 0,
+        views: s.views || 0
       };
     }
     result.push({ timestamp: s.timestamp, ...current });
@@ -620,8 +663,11 @@ function encodeAsDeltas(absoluteSnapshots) {
     if (curr.laughs - prev.laughs) delta.dla = curr.laughs - prev.laughs;
     if (curr.cries - prev.cries) delta.dc = curr.cries - prev.cries;
     if (curr.comments - prev.comments) delta.dco = curr.comments - prev.comments;
+    if (curr.buzz - prev.buzz) delta.dbu = curr.buzz - prev.buzz;
+    if (curr.collects - prev.collects) delta.dcol = curr.collects - prev.collects;
+    if (curr.views - prev.views) delta.dvi = curr.views - prev.views;
     // Mark as delta even when all changes are zero, so resolvers don't mistake it for absolute
-    if (!delta.dl && !delta.dh && !delta.dla && !delta.dc && !delta.dco) {
+    if (!delta.dl && !delta.dh && !delta.dla && !delta.dc && !delta.dco && !delta.dbu && !delta.dcol && !delta.dvi) {
       delta._d = 1;
     }
     result.push(delta);
@@ -645,6 +691,9 @@ function processImages(apiImages, existingImages = []) {
   let totalLaughs = 0;
   let totalCries = 0;
   let totalComments = 0;
+  let totalBuzz = 0;
+  let totalCollects = 0;
+  let totalViews = 0;
 
   const images = apiImages.map(img => {
     const apiLikes = img.stats?.likeCount || 0;
@@ -652,6 +701,9 @@ function processImages(apiImages, existingImages = []) {
     const apiLaughs = img.stats?.laughCount || 0;
     const apiCries = img.stats?.cryCount || 0;
     const apiComments = img.stats?.commentCount || 0;
+    const apiBuzz = img.stats?.buzzCount || 0;
+    const apiCollects = img.stats?.collectCount || 0;
+    const apiViews = img.stats?.viewCount || 0;
 
     // Get existing image data if available
     const existingImage = existingImageMap.get(String(img.id));
@@ -668,6 +720,9 @@ function processImages(apiImages, existingImages = []) {
     const laughs = Math.max(apiLaughs, lastSnapshot?.laughs || 0);
     const cries = Math.max(apiCries, lastSnapshot?.cries || 0);
     const comments = Math.max(apiComments, lastSnapshot?.comments || 0);
+    const buzz = Math.max(apiBuzz, lastSnapshot?.buzz || 0);
+    const collects = Math.max(apiCollects, lastSnapshot?.collects || 0);
+    const views = Math.max(apiViews, lastSnapshot?.views || 0);
 
     if (lastSnapshot && (apiLikes < lastSnapshot.likes || apiHearts < lastSnapshot.hearts ||
         apiLaughs < lastSnapshot.laughs || apiCries < lastSnapshot.cries || apiComments < lastSnapshot.comments)) {
@@ -679,6 +734,9 @@ function processImages(apiImages, existingImages = []) {
     totalLaughs += laughs;
     totalCries += cries;
     totalComments += comments;
+    totalBuzz += buzz;
+    totalCollects += collects;
+    totalViews += views;
 
     // Only store new snapshot if reactions actually changed (or it's the first snapshot)
     const hasChanged = !lastSnapshot ||
@@ -686,12 +744,15 @@ function processImages(apiImages, existingImages = []) {
       lastSnapshot.hearts !== hearts ||
       lastSnapshot.laughs !== laughs ||
       lastSnapshot.cries !== cries ||
-      lastSnapshot.comments !== comments;
+      lastSnapshot.comments !== comments ||
+      lastSnapshot.buzz !== buzz ||
+      lastSnapshot.collects !== collects ||
+      lastSnapshot.views !== views;
 
     if (hasChanged) {
       if (!lastSnapshot) {
         // First snapshot — store absolute
-        snapshots.push({ timestamp, likes, hearts, laughs, cries, comments });
+        snapshots.push({ timestamp, likes, hearts, laughs, cries, comments, buzz, collects, views });
       } else {
         // Subsequent snapshot — store as delta
         const delta = { timestamp };
@@ -700,6 +761,9 @@ function processImages(apiImages, existingImages = []) {
         if (laughs - lastSnapshot.laughs) delta.dla = laughs - lastSnapshot.laughs;
         if (cries - lastSnapshot.cries) delta.dc = cries - lastSnapshot.cries;
         if (comments - lastSnapshot.comments) delta.dco = comments - lastSnapshot.comments;
+        if (buzz - lastSnapshot.buzz) delta.dbu = buzz - lastSnapshot.buzz;
+        if (collects - lastSnapshot.collects) delta.dcol = collects - lastSnapshot.collects;
+        if (views - lastSnapshot.views) delta.dvi = views - lastSnapshot.views;
         if (Object.keys(delta).length > 1) {
           snapshots.push(delta);
         }
@@ -732,6 +796,9 @@ function processImages(apiImages, existingImages = []) {
     laughs: totalLaughs,
     cries: totalCries,
     comments: totalComments,
+    buzz: totalBuzz,
+    collects: totalCollects,
+    views: totalViews,
     imageCount: images.length
   };
 
@@ -795,6 +862,9 @@ async function main() {
     console.log(`  Laughs: ${totalSnapshot.laughs}`);
     console.log(`  Cries: ${totalSnapshot.cries}`);
     console.log(`  Comments: ${totalSnapshot.comments}`);
+    console.log(`  Buzz: ${totalSnapshot.buzz}`);
+    console.log(`  Collects: ${totalSnapshot.collects}`);
+    console.log(`  Views: ${totalSnapshot.views}`);
 
     // Append new total snapshot (as delta if possible)
     if (existingData.totalSnapshots.length > 0) {
@@ -805,7 +875,10 @@ async function main() {
       if (totalSnapshot.laughs - prevTotal.laughs) delta.dla = totalSnapshot.laughs - prevTotal.laughs;
       if (totalSnapshot.cries - prevTotal.cries) delta.dc = totalSnapshot.cries - prevTotal.cries;
       if (totalSnapshot.comments - prevTotal.comments) delta.dco = totalSnapshot.comments - prevTotal.comments;
-      if (!delta.dl && !delta.dh && !delta.dla && !delta.dc && !delta.dco) {
+      if (totalSnapshot.buzz - (prevTotal.buzz || 0)) delta.dbu = totalSnapshot.buzz - (prevTotal.buzz || 0);
+      if (totalSnapshot.collects - (prevTotal.collects || 0)) delta.dcol = totalSnapshot.collects - (prevTotal.collects || 0);
+      if (totalSnapshot.views - (prevTotal.views || 0)) delta.dvi = totalSnapshot.views - (prevTotal.views || 0);
+      if (!delta.dl && !delta.dh && !delta.dla && !delta.dc && !delta.dco && !delta.dbu && !delta.dcol && !delta.dvi) {
         delta._d = 1;
       }
       existingData.totalSnapshots.push(delta);
