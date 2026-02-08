@@ -87,6 +87,32 @@ Chrome Extension ◄── reads ◄── gist.githubusercontent.com
 3. Click **Save**
 4. The status should change to "Configured"
 
+## Manual Stats Refresh
+
+By default, the stats collector runs hourly with a smart tiered refresh system:
+- **Daily**: Refreshes images from last 30 days
+- **Monthly** (1st of month): Also refreshes images from 1-6 months ago
+- **Quarterly** (Jan/Apr/Jul/Oct 1st): Refreshes ALL images
+
+### Force Full Refresh for All Images
+
+To manually trigger a full refresh of ALL images (including old ones):
+
+1. Go to your repository on GitHub
+2. Click **Actions** tab
+3. Select **Collect Civitai Stats** workflow
+4. Click **Run workflow** button (top right)
+5. Select **quarterly** from the "Refresh tier" dropdown
+6. Click **Run workflow**
+
+This will fetch fresh stats for every image, regardless of age.
+
+**Options:**
+- `auto` - Use date-based logic (default for scheduled runs)
+- `daily` - Refresh only last 30 days
+- `monthly` - Refresh up to 6 months
+- `quarterly` - Refresh ALL images (use this to force full refresh)
+
 ### 7. Using the Extension
 
 **Option 1: Via Extension Popup**

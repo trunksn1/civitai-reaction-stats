@@ -5,6 +5,7 @@ const GIST_ID = process.env.GIST_ID;
 const GIST_TOKEN = process.env.GIST_TOKEN;
 const CIVITAI_USERNAME = process.env.CIVITAI_USERNAME;
 const CIVITAI_API_KEY = process.env.CIVITAI_API_KEY; // Optional - may help get accurate stats
+const REFRESH_TIER_OVERRIDE = process.env.REFRESH_TIER; // Optional: 'auto', 'daily', 'monthly', 'quarterly'
 
 // Validate required environment variables
 if (!GIST_ID || !GIST_TOKEN || !CIVITAI_USERNAME) {
@@ -95,12 +96,19 @@ async function fetchImageStats(imageId) {
 }
 
 /**
- * Determine which tier of refresh to run based on current date
+ * Determine which tier of refresh to run based on current date or override
  * - Daily: images from last 30 days + any with 0 stats
  * - Monthly (1st of month): also images from 1-6 months ago
  * - Quarterly (1st of month in Jan/Apr/Jul/Oct): ALL images
  */
 function getRefreshTier() {
+  // Check for manual override from workflow_dispatch input
+  if (REFRESH_TIER_OVERRIDE && REFRESH_TIER_OVERRIDE !== 'auto') {
+    console.log(`Using manual refresh tier override: ${REFRESH_TIER_OVERRIDE}`);
+    return REFRESH_TIER_OVERRIDE;
+  }
+
+  // Auto: determine tier based on date
   const now = new Date();
   const dayOfMonth = now.getDate();
   const month = now.getMonth(); // 0-indexed
@@ -473,6 +481,10 @@ async function main() {
   console.log('=== Civitai Stats Collector ===');
   console.log(`Time: ${new Date().toISOString()}`);
   console.log(`Username: ${CIVITAI_USERNAME}`);
+  console.log('');
+  if (REFRESH_TIER_OVERRIDE && REFRESH_TIER_OVERRIDE !== 'auto') {
+    console.log(`Refresh tier override: ${REFRESH_TIER_OVERRIDE} (manually triggered)`);
+  }
   console.log('');
 
   try {

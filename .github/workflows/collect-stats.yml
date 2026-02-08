@@ -4,6 +4,17 @@ on:
   schedule:
     - cron: '0 * * * *'  # Every hour
   workflow_dispatch:      # Manual trigger
+    inputs:
+      refresh-tier:
+        description: 'Refresh tier (auto = use date-based logic)'
+        required: false
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - daily
+          - monthly
+          - quarterly
 
 jobs:
   collect:
@@ -30,3 +41,4 @@ jobs:
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
           CIVITAI_USERNAME: ${{ secrets.CIVITAI_USERNAME }}
           CIVITAI_API_KEY: ${{ secrets.CIVITAI_API_KEY }}
+          REFRESH_TIER: ${{ github.event.inputs.refresh-tier || 'auto' }}
