@@ -95,30 +95,77 @@ async function fetchImageStats(imageId) {
 }
 
 /**
- * Fetch accurate stats for images that have 0 reactions in bulk response
- * The Civitai public API only returns accurate stats when querying by imageId
+ * Determine which tier of refresh to run based on current date
+ * - Daily: images from last 30 days + any with 0 stats
+ * - Monthly (1st of month): also images from 1-6 months ago
+ * - Quarterly (1st of month in Jan/Apr/Jul/Oct): ALL images
  */
-async function fetchMissingStats(images) {
-  const zeroStatsImages = images.filter(img => {
+function getRefreshTier() {
+  const now = new Date();
+  const dayOfMonth = now.getDate();
+  const month = now.getMonth(); // 0-indexed
+
+  if (dayOfMonth === 1 && month % 3 === 0) {
+    return 'quarterly';
+  }
+  if (dayOfMonth === 1) {
+    return 'monthly';
+  }
+  return 'daily';
+}
+
+/**
+ * Refresh image stats individually based on a tiered schedule.
+ * The Civitai bulk API returns stale stats, so we re-fetch individually
+ * on a smart schedule to keep stats fresh without excessive API calls.
+ */
+async function refreshImageStats(images) {
+  const tier = getRefreshTier();
+  const now = new Date();
+  const thirtyDaysAgo = new Date(now - 30 * 24 * 60 * 60 * 1000);
+  const sixMonthsAgo = new Date(now - 180 * 24 * 60 * 60 * 1000);
+
+  // Determine which images to refresh
+  const toRefresh = new Set();
+
+  for (const img of images) {
     const total = (img.stats?.likeCount || 0) + (img.stats?.heartCount || 0) +
                   (img.stats?.laughCount || 0) + (img.stats?.cryCount || 0);
-    return total === 0;
-  });
+    const createdAt = new Date(img.createdAt);
 
-  if (zeroStatsImages.length === 0) {
-    console.log('\nAll images already have stats from bulk fetch.');
+    // Always: images with 0 stats or from last 30 days
+    if (total === 0 || createdAt >= thirtyDaysAgo) {
+      toRefresh.add(img);
+      continue;
+    }
+
+    // Monthly: also images from 1-6 months ago
+    if ((tier === 'monthly' || tier === 'quarterly') && createdAt >= sixMonthsAgo) {
+      toRefresh.add(img);
+      continue;
+    }
+
+    // Quarterly: ALL images
+    if (tier === 'quarterly') {
+      toRefresh.add(img);
+    }
+  }
+
+  const refreshList = [...toRefresh];
+
+  console.log(`\nRefreshing stats: ${refreshList.length}/${images.length} images (tier: ${tier})`);
+  console.log(`(Civitai API only returns accurate stats when querying by imageId)`);
+
+  if (refreshList.length === 0) {
     return images;
   }
 
-  console.log(`\nFetching individual stats for ${zeroStatsImages.length} images with 0 reactions...`);
-  console.log(`(Civitai API only returns accurate stats when querying by imageId)`);
-
   let updated = 0;
-  let stillZero = 0;
+  let unchanged = 0;
 
   // Process in batches to avoid overwhelming the API
-  for (let i = 0; i < zeroStatsImages.length; i += STATS_BATCH_SIZE) {
-    const batch = zeroStatsImages.slice(i, i + STATS_BATCH_SIZE);
+  for (let i = 0; i < refreshList.length; i += STATS_BATCH_SIZE) {
+    const batch = refreshList.slice(i, i + STATS_BATCH_SIZE);
 
     const results = await Promise.all(
       batch.map(img => fetchImageStats(img.id))
@@ -127,34 +174,36 @@ async function fetchMissingStats(images) {
     for (let j = 0; j < batch.length; j++) {
       const stats = results[j];
       if (stats) {
+        const oldTotal = (batch[j].stats?.likeCount || 0) + (batch[j].stats?.heartCount || 0) +
+                         (batch[j].stats?.laughCount || 0) + (batch[j].stats?.cryCount || 0);
         batch[j].stats = stats;
-        const total = (stats.likeCount || 0) + (stats.heartCount || 0) +
-                      (stats.laughCount || 0) + (stats.cryCount || 0);
-        if (total > 0) {
+        const newTotal = (stats.likeCount || 0) + (stats.heartCount || 0) +
+                         (stats.laughCount || 0) + (stats.cryCount || 0);
+        if (newTotal !== oldTotal) {
           updated++;
         } else {
-          stillZero++;
+          unchanged++;
         }
       } else {
-        stillZero++;
+        unchanged++;
       }
     }
 
     // Progress update every 50 images
-    const processed = Math.min(i + STATS_BATCH_SIZE, zeroStatsImages.length);
-    if (processed % 50 === 0 || processed === zeroStatsImages.length) {
-      console.log(`  Progress: ${processed}/${zeroStatsImages.length} (${updated} updated with stats)`);
+    const processed = Math.min(i + STATS_BATCH_SIZE, refreshList.length);
+    if (processed % 50 === 0 || processed === refreshList.length) {
+      console.log(`  Progress: ${processed}/${refreshList.length} (${updated} changed)`);
     }
 
     // Delay between batches
-    if (i + STATS_BATCH_SIZE < zeroStatsImages.length) {
+    if (i + STATS_BATCH_SIZE < refreshList.length) {
       await sleep(STATS_FETCH_DELAY_MS);
     }
   }
 
-  console.log(`\nIndividual stats fetch complete:`);
-  console.log(`  Updated with real stats: ${updated}`);
-  console.log(`  Still 0 reactions (genuinely no reactions): ${stillZero}`);
+  console.log(`\nIndividual stats refresh complete:`);
+  console.log(`  Stats changed: ${updated}`);
+  console.log(`  Unchanged: ${unchanged}`);
 
   return images;
 }
@@ -212,8 +261,8 @@ async function fetchAllUserImages(username) {
   }
   console.log(`\nBulk fetch stats: ${hasStatsCount} with reactions, ${zeroStatsCount} with 0 reactions`);
 
-  // Re-fetch accurate stats for images with 0 reactions
-  const imagesWithStats = await fetchMissingStats(publishedImages);
+  // Re-fetch accurate stats using tiered schedule
+  const imagesWithStats = await refreshImageStats(publishedImages);
 
   console.log(`\nTotal published images: ${imagesWithStats.length}`);
   return imagesWithStats;
@@ -400,6 +449,10 @@ function processImages(apiImages, existingImages = []) {
     };
   });
 
+  const newImages = images.filter(img => img.snapshots.length === 1).length;
+  const multiSnapshot = images.filter(img => img.snapshots.length > 1).length;
+  console.log(`\nImage history: ${newImages} new, ${multiSnapshot} with prior history`);
+
   const totalSnapshot = {
     timestamp,
     likes: totalLikes,
@@ -433,6 +486,8 @@ async function main() {
 
     // Read existing Gist data
     const existingData = await readGistData();
+
+    console.log(`\nExisting data: ${existingData.totalSnapshots.length} totalSnapshots, ${existingData.images.length} images`);
 
     // Process images with existing data to merge snapshots
     const { images, totalSnapshot } = processImages(apiImages, existingData.images);
