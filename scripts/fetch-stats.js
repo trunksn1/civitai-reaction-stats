@@ -604,17 +604,11 @@ function processImages(apiImages, existingImages = []) {
   let totalComments = 0;
 
   const images = apiImages.map(img => {
-    const likes = img.stats?.likeCount || 0;
-    const hearts = img.stats?.heartCount || 0;
-    const laughs = img.stats?.laughCount || 0;
-    const cries = img.stats?.cryCount || 0;
-    const comments = img.stats?.commentCount || 0;
-
-    totalLikes += likes;
-    totalHearts += hearts;
-    totalLaughs += laughs;
-    totalCries += cries;
-    totalComments += comments;
+    const apiLikes = img.stats?.likeCount || 0;
+    const apiHearts = img.stats?.heartCount || 0;
+    const apiLaughs = img.stats?.laughCount || 0;
+    const apiCries = img.stats?.cryCount || 0;
+    const apiComments = img.stats?.commentCount || 0;
 
     // Get existing image data if available
     const existingImage = existingImageMap.get(String(img.id));
@@ -624,6 +618,24 @@ function processImages(apiImages, existingImages = []) {
     const lastSnapshot = snapshots.length > 0
       ? resolveSnapshot(snapshots, snapshots.length - 1)
       : null;
+
+    // Clamp: never let stats decrease due to stale bulk API data
+    const likes = Math.max(apiLikes, lastSnapshot?.likes || 0);
+    const hearts = Math.max(apiHearts, lastSnapshot?.hearts || 0);
+    const laughs = Math.max(apiLaughs, lastSnapshot?.laughs || 0);
+    const cries = Math.max(apiCries, lastSnapshot?.cries || 0);
+    const comments = Math.max(apiComments, lastSnapshot?.comments || 0);
+
+    if (lastSnapshot && (apiLikes < lastSnapshot.likes || apiHearts < lastSnapshot.hearts ||
+        apiLaughs < lastSnapshot.laughs || apiCries < lastSnapshot.cries || apiComments < lastSnapshot.comments)) {
+      console.log(`  Clamped stale API stats for image ${img.id}: API[${apiLikes},${apiHearts},${apiLaughs},${apiCries},${apiComments}] -> kept[${likes},${hearts},${laughs},${cries},${comments}]`);
+    }
+
+    totalLikes += likes;
+    totalHearts += hearts;
+    totalLaughs += laughs;
+    totalCries += cries;
+    totalComments += comments;
 
     // Only store new snapshot if reactions actually changed (or it's the first snapshot)
     const hasChanged = !lastSnapshot ||
