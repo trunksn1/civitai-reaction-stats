@@ -266,7 +266,7 @@ function updateChart() {
 function getChartData() {
   const snapshots = filterByTimeRange(statsData.totalSnapshots || []);
 
-  const labels = snapshots.map(s => formatChartDate(new Date(s.timestamp)));
+  const labels = snapshots.map(s => formatChartDate(new Date(s.timestamp), currentTimeRange));
 
   const datasets = [];
 
@@ -355,6 +355,7 @@ function filterByTimeRange(snapshots, timeRange = null) {
 
   const now = Date.now();
   const ranges = {
+    '1d': 1 * 24 * 60 * 60 * 1000,
     '7d': 7 * 24 * 60 * 60 * 1000,
     '30d': 30 * 24 * 60 * 60 * 1000,
     '90d': 90 * 24 * 60 * 60 * 1000,
@@ -482,7 +483,7 @@ function renderImageChart(image, timeRange) {
   const emptyMsg = wrapper.querySelector('.image-chart-empty');
   if (emptyMsg) emptyMsg.remove();
 
-  const labels = snapshots.map(s => formatChartDate(new Date(s.timestamp)));
+  const labels = snapshots.map(s => formatChartDate(new Date(s.timestamp), timeRange));
 
   const chart = new Chart(ctx, {
     type: 'line',
@@ -670,6 +671,7 @@ function createImageCard(image) {
         <div class="image-chart-container" id="chart-container-${escapeHtml(image.id)}">
           <div class="image-chart-controls">
             <div class="image-time-selector">
+              <button class="image-time-btn" data-range="1d" data-image-id="${escapeHtml(image.id)}">1D</button>
               <button class="image-time-btn active" data-range="7d" data-image-id="${escapeHtml(image.id)}">7D</button>
               <button class="image-time-btn" data-range="30d" data-image-id="${escapeHtml(image.id)}">30D</button>
               <button class="image-time-btn" data-range="1y" data-image-id="${escapeHtml(image.id)}">1Y</button>
@@ -718,11 +720,23 @@ function formatDate(date) {
 /**
  * Format a date for chart labels
  */
-function formatChartDate(date) {
-  return date.toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric'
-  });
+function formatChartDate(date, timeRange) {
+  switch (timeRange) {
+    case '1d':
+      return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+    case '7d':
+      return date.toLocaleDateString('en-US', { weekday: 'short' }) + ' ' +
+             date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+    case '30d':
+    case '90d':
+      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    case '1y':
+      return date.toLocaleDateString('en-US', { month: 'short' });
+    case 'all':
+    default:
+      const year = date.getFullYear().toString().slice(-2);
+      return date.toLocaleDateString('en-US', { month: 'short' }) + " '" + year;
+  }
 }
 
 /**
