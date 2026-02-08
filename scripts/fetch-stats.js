@@ -258,25 +258,40 @@ async function fetchAllPages(startUrl, label) {
 
 /**
  * Fetch all images for a user, paginating through all results.
- * Makes two passes (SFW + NSFW) because the Civitai API doesn't return all images in one call.
- * See: https://github.com/civitai/civitai/issues/1277
+ * Fetches each NSFW level separately because the API doesn't reliably return all in one call.
+ * nsfw=true only returns Mature+X, omitting Soft (PG-13). See: github.com/civitai/civitai/issues/1795
  */
 async function fetchAllUserImages(username) {
   const baseUrl = `${CIVITAI_API_BASE}/images?username=${encodeURIComponent(username)}&limit=${IMAGES_PER_PAGE}&sort=Newest&period=AllTime`;
 
-  // Two passes: SFW (default) + NSFW-only, because the API doesn't reliably return all in one call
+  // Fetch each NSFW level separately because the API doesn't reliably return all in one call.
+  // nsfw=true only returns Mature+X, omitting Soft (PG-13). See: github.com/civitai/civitai/issues/1795
   console.log(`Fetching images for user: ${username}`);
 
-  const sfwImages = await fetchAllPages(baseUrl, 'SFW');
-  const nsfwImages = await fetchAllPages(`${baseUrl}&nsfw=true`, 'NSFW');
+  const nsfwLevels = [
+    { param: '',             label: 'SFW (None)' },
+    { param: '&nsfw=Soft',   label: 'Soft (PG-13)' },
+    { param: '&nsfw=Mature', label: 'Mature (R)' },
+    { param: '&nsfw=X',     label: 'X' },
+  ];
+
+  const results = [];
+  for (const { param, label } of nsfwLevels) {
+    const images = await fetchAllPages(`${baseUrl}${param}`, label);
+    results.push({ label, count: images.length, images });
+  }
 
   // Merge and deduplicate by image ID
   const imageMap = new Map();
-  for (const img of [...sfwImages, ...nsfwImages]) {
-    imageMap.set(img.id, img);
+  for (const { images } of results) {
+    for (const img of images) {
+      imageMap.set(img.id, img);
+    }
   }
   const allImages = Array.from(imageMap.values());
-  console.log(`\nCombined: ${sfwImages.length} SFW + ${nsfwImages.length} NSFW = ${allImages.length} unique images`);
+
+  const breakdown = results.map(r => `${r.count} ${r.label}`).join(' + ');
+  console.log(`\nCombined: ${breakdown} = ${allImages.length} unique images`);
 
   // Filter out unpublished/scheduled images (future dates)
   const now = new Date();

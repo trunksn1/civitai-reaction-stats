@@ -17,7 +17,8 @@
       "Bash(comm:*)",
       "Bash(while read:*)",
       "Bash(do grep \"\"\"id\"\": \"\"$id\"\"\" -A 2 \"E:\\\\Clouding\\\\Dropbox\\\\INFORMATICA\\\\GitHub\\\\Civitai Reaction Stats\\\\stats.json good.txt\")",
-      "Bash(done)"
+      "Bash(done)",
+      "WebFetch(domain:education.civitai.com)"
     ]
   }
 }

@@ -1,222 +1,248 @@
-﻿2026-02-08T19:46:28.1804386Z Current runner version: '2.331.0'
-2026-02-08T19:46:28.1837679Z ##[group]Runner Image Provisioner
-2026-02-08T19:46:28.1839012Z Hosted Compute Agent
-2026-02-08T19:46:28.1840050Z Version: 20260123.484
-2026-02-08T19:46:28.1841241Z Commit: 6bd6555ca37d84114959e1c76d2c01448ff61c5d
-2026-02-08T19:46:28.1842649Z Build Date: 2026-01-23T19:41:17Z
-2026-02-08T19:46:28.1843737Z Worker ID: {e1d05a28-ca05-45b9-a161-8430c9da4ce4}
-2026-02-08T19:46:28.1845012Z Azure Region: eastus2
-2026-02-08T19:46:28.1845944Z ##[endgroup]
-2026-02-08T19:46:28.1848482Z ##[group]Operating System
-2026-02-08T19:46:28.1849652Z Ubuntu
-2026-02-08T19:46:28.1850347Z 24.04.3
-2026-02-08T19:46:28.1851262Z LTS
-2026-02-08T19:46:28.1852308Z ##[endgroup]
-2026-02-08T19:46:28.1853199Z ##[group]Runner Image
-2026-02-08T19:46:28.1854325Z Image: ubuntu-24.04
-2026-02-08T19:46:28.1855194Z Version: 20260201.15.1
-2026-02-08T19:46:28.1857396Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260201.15/images/ubuntu/Ubuntu2404-Readme.md
-2026-02-08T19:46:28.1860170Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260201.15
-2026-02-08T19:46:28.1862305Z ##[endgroup]
-2026-02-08T19:46:28.1864123Z ##[group]GITHUB_TOKEN Permissions
-2026-02-08T19:46:28.1867005Z Contents: read
-2026-02-08T19:46:28.1867863Z Metadata: read
-2026-02-08T19:46:28.1868643Z Packages: read
-2026-02-08T19:46:28.1869756Z ##[endgroup]
-2026-02-08T19:46:28.1873107Z Secret source: Actions
-2026-02-08T19:46:28.1874755Z Prepare workflow directory
-2026-02-08T19:46:28.2320400Z Prepare all required actions
-2026-02-08T19:46:28.2376751Z Getting action download info
-2026-02-08T19:46:28.5078363Z Download action repository 'actions/checkout@v4' (SHA:34e114876b0b11c390a56381ad16ebd13914f8d5)
-2026-02-08T19:46:28.6237231Z Download action repository 'actions/setup-node@v4' (SHA:49933ea5288caeca8642d1e84afbd3f7d6820020)
-2026-02-08T19:46:28.8106490Z Complete job name: collect
-2026-02-08T19:46:28.8763282Z ##[group]Run actions/checkout@v4
-2026-02-08T19:46:28.8764099Z with:
-2026-02-08T19:46:28.8764584Z   repository: trunksn1/civitai-reaction-stats
-2026-02-08T19:46:28.8765302Z   token: ***
-2026-02-08T19:46:28.8765702Z   ssh-strict: true
-2026-02-08T19:46:28.8766112Z   ssh-user: git
-2026-02-08T19:46:28.8766523Z   persist-credentials: true
-2026-02-08T19:46:28.8766982Z   clean: true
-2026-02-08T19:46:28.8767401Z   sparse-checkout-cone-mode: true
-2026-02-08T19:46:28.8767893Z   fetch-depth: 1
-2026-02-08T19:46:28.8768286Z   fetch-tags: false
-2026-02-08T19:46:28.8768687Z   show-progress: true
-2026-02-08T19:46:28.8769108Z   lfs: false
-2026-02-08T19:46:28.8769489Z   submodules: false
-2026-02-08T19:46:28.8769901Z   set-safe-directory: true
-2026-02-08T19:46:28.8770543Z ##[endgroup]
-2026-02-08T19:46:28.9870753Z Syncing repository: trunksn1/civitai-reaction-stats
-2026-02-08T19:46:28.9873396Z ##[group]Getting Git version info
-2026-02-08T19:46:28.9875033Z Working directory is '/home/runner/work/civitai-reaction-stats/civitai-reaction-stats'
-2026-02-08T19:46:28.9877213Z [command]/usr/bin/git version
-2026-02-08T19:46:28.9954885Z git version 2.52.0
-2026-02-08T19:46:28.9981194Z ##[endgroup]
-2026-02-08T19:46:28.9996691Z Temporarily overriding HOME='/home/runner/work/_temp/c1dca33f-0399-4314-b7ff-cc8a2e9a80a7' before making global git config changes
-2026-02-08T19:46:28.9999123Z Adding repository directory to the temporary git global config as a safe directory
-2026-02-08T19:46:29.0010883Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/civitai-reaction-stats/civitai-reaction-stats
-2026-02-08T19:46:29.0049954Z Deleting the contents of '/home/runner/work/civitai-reaction-stats/civitai-reaction-stats'
-2026-02-08T19:46:29.0053543Z ##[group]Initializing the repository
-2026-02-08T19:46:29.0058690Z [command]/usr/bin/git init /home/runner/work/civitai-reaction-stats/civitai-reaction-stats
-2026-02-08T19:46:29.0190661Z hint: Using 'master' as the name for the initial branch. This default branch name
-2026-02-08T19:46:29.0192297Z hint: will change to "main" in Git 3.0. To configure the initial branch name
-2026-02-08T19:46:29.0193548Z hint: to use in all of your new repositories, which will suppress this warning,
-2026-02-08T19:46:29.0194276Z hint: call:
-2026-02-08T19:46:29.0194670Z hint:
-2026-02-08T19:46:29.0195175Z hint: 	git config --global init.defaultBranch <name>
-2026-02-08T19:46:29.0195807Z hint:
-2026-02-08T19:46:29.0196381Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
-2026-02-08T19:46:29.0197316Z hint: 'development'. The just-created branch can be renamed via this command:
-2026-02-08T19:46:29.0198037Z hint:
-2026-02-08T19:46:29.0198441Z hint: 	git branch -m <name>
-2026-02-08T19:46:29.0198911Z hint:
-2026-02-08T19:46:29.0199516Z hint: Disable this message with "git config set advice.defaultBranchName false"
-2026-02-08T19:46:29.0211946Z Initialized empty Git repository in /home/runner/work/civitai-reaction-stats/civitai-reaction-stats/.git/
-2026-02-08T19:46:29.0224267Z [command]/usr/bin/git remote add origin https://github.com/trunksn1/civitai-reaction-stats
-2026-02-08T19:46:29.0257370Z ##[endgroup]
-2026-02-08T19:46:29.0258617Z ##[group]Disabling automatic garbage collection
-2026-02-08T19:46:29.0262480Z [command]/usr/bin/git config --local gc.auto 0
-2026-02-08T19:46:29.0290287Z ##[endgroup]
-2026-02-08T19:46:29.0291563Z ##[group]Setting up auth
-2026-02-08T19:46:29.0297916Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
-2026-02-08T19:46:29.0327155Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
-2026-02-08T19:46:29.0679517Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
-2026-02-08T19:46:29.0707640Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
-2026-02-08T19:46:29.0925134Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
-2026-02-08T19:46:29.0954916Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
-2026-02-08T19:46:29.1184354Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
-2026-02-08T19:46:29.1218644Z ##[endgroup]
-2026-02-08T19:46:29.1219496Z ##[group]Fetching the repository
-2026-02-08T19:46:29.1227556Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +7934d76a8c338d4425a4c7b14d41432dec5f1e94:refs/remotes/origin/main
-2026-02-08T19:46:29.3692330Z From https://github.com/trunksn1/civitai-reaction-stats
-2026-02-08T19:46:29.3693310Z  * [new ref]         7934d76a8c338d4425a4c7b14d41432dec5f1e94 -> origin/main
-2026-02-08T19:46:29.3724057Z ##[endgroup]
-2026-02-08T19:46:29.3725199Z ##[group]Determining the checkout info
-2026-02-08T19:46:29.3726418Z ##[endgroup]
-2026-02-08T19:46:29.3731030Z [command]/usr/bin/git sparse-checkout disable
-2026-02-08T19:46:29.3770212Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
-2026-02-08T19:46:29.3794896Z ##[group]Checking out the ref
-2026-02-08T19:46:29.3798473Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
-2026-02-08T19:46:29.4184895Z Switched to a new branch 'main'
-2026-02-08T19:46:29.4186417Z branch 'main' set up to track 'origin/main'.
-2026-02-08T19:46:29.4196602Z ##[endgroup]
-2026-02-08T19:46:29.4233156Z [command]/usr/bin/git log -1 --format=%H
-2026-02-08T19:46:29.4254553Z 7934d76a8c338d4425a4c7b14d41432dec5f1e94
-2026-02-08T19:46:29.4501873Z ##[group]Run actions/setup-node@v4
-2026-02-08T19:46:29.4502467Z with:
-2026-02-08T19:46:29.4502835Z   node-version: 20
-2026-02-08T19:46:29.4503228Z   cache: npm
-2026-02-08T19:46:29.4503700Z   cache-dependency-path: scripts/package-lock.json
-2026-02-08T19:46:29.4504271Z   always-auth: false
-2026-02-08T19:46:29.4504686Z   check-latest: false
-2026-02-08T19:46:29.4505471Z   token: ***
-2026-02-08T19:46:29.4505836Z ##[endgroup]
-2026-02-08T19:46:29.6273181Z Found in cache @ /opt/hostedtoolcache/node/20.20.0/x64
-2026-02-08T19:46:29.6278970Z ##[group]Environment details
-2026-02-08T19:46:30.7741347Z node: v20.20.0
-2026-02-08T19:46:30.7742323Z npm: 10.8.2
-2026-02-08T19:46:30.7742738Z yarn: 1.22.22
-2026-02-08T19:46:30.7743637Z ##[endgroup]
-2026-02-08T19:46:30.7764859Z [command]/opt/hostedtoolcache/node/20.20.0/x64/bin/npm config get cache
-2026-02-08T19:46:30.8987917Z /home/runner/.npm
-2026-02-08T19:46:31.0310891Z Cache hit for: node-cache-Linux-x64-npm-429d186920c749401a7da92f26b3a4ced128f45e561b21d2866ac5be23aa9410
-2026-02-08T19:46:31.1183138Z Received 785637 of 785637 (100.0%), 14.1 MBs/sec
-2026-02-08T19:46:31.1183874Z Cache Size: ~1 MB (785637 B)
-2026-02-08T19:46:31.1209649Z [command]/usr/bin/tar -xf /home/runner/work/_temp/15cd8624-e217-48c0-b945-dec20d8da14f/cache.tzst -P -C /home/runner/work/civitai-reaction-stats/civitai-reaction-stats --use-compress-program unzstd
-2026-02-08T19:46:31.1306354Z Cache restored successfully
-2026-02-08T19:46:31.1314426Z Cache restored from key: node-cache-Linux-x64-npm-429d186920c749401a7da92f26b3a4ced128f45e561b21d2866ac5be23aa9410
-2026-02-08T19:46:31.1426815Z ##[group]Run cd scripts && npm ci
-2026-02-08T19:46:31.1427254Z [36;1mcd scripts && npm ci[0m
-2026-02-08T19:46:31.1472440Z shell: /usr/bin/bash -e {0}
-2026-02-08T19:46:31.1472782Z ##[endgroup]
-2026-02-08T19:46:32.0490408Z 
-2026-02-08T19:46:32.0497958Z added 17 packages, and audited 18 packages in 838ms
-2026-02-08T19:46:32.0498727Z 
-2026-02-08T19:46:32.0499248Z found 0 vulnerabilities
-2026-02-08T19:46:32.0619082Z ##[group]Run node scripts/fetch-stats.js
-2026-02-08T19:46:32.0619452Z [36;1mnode scripts/fetch-stats.js[0m
-2026-02-08T19:46:32.0653247Z shell: /usr/bin/bash -e {0}
-2026-02-08T19:46:32.0653515Z env:
-2026-02-08T19:46:32.0654014Z   GIST_ID: ***
-2026-02-08T19:46:32.0654586Z   GIST_TOKEN: ***
-2026-02-08T19:46:32.0654831Z   CIVITAI_USERNAME: ***
-2026-02-08T19:46:32.0655151Z   CIVITAI_API_KEY: ***
-2026-02-08T19:46:32.0717507Z   REFRESH_TIER: auto
-2026-02-08T19:46:32.0717912Z ##[endgroup]
-2026-02-08T19:46:32.1239340Z Using Civitai API key for authenticated requests
-2026-02-08T19:46:32.1253293Z === Civitai Stats Collector ===
-2026-02-08T19:46:32.1255442Z Time: 2026-02-08T19:46:32.125Z
-2026-02-08T19:46:32.1256131Z Username: ***
-2026-02-08T19:46:32.1256382Z 
-2026-02-08T19:46:32.1256411Z 
-2026-02-08T19:46:32.1257742Z Fetching images for user: ***
-2026-02-08T19:46:32.1258273Z Fetching page 1...
-2026-02-08T19:46:34.0586591Z   Retrieved 200 images (total: 200)
-2026-02-08T19:46:34.5580956Z Fetching page 2...
-2026-02-08T19:46:35.8289847Z   Retrieved 200 images (total: 400)
-2026-02-08T19:46:36.3282693Z Fetching page 3...
-2026-02-08T19:46:36.8843729Z   Retrieved 10 images (total: 410)
-2026-02-08T19:46:36.8847218Z 
-2026-02-08T19:46:36.8847894Z Filtered out 10 unpublished/scheduled images (future dates)
-2026-02-08T19:46:36.8849378Z 
-2026-02-08T19:46:36.8849832Z Bulk fetch stats: 315 with reactions, 85 with 0 reactions
-2026-02-08T19:46:36.8857572Z 
-2026-02-08T19:46:36.8857924Z Refreshing stats: 85/400 images (tier: daily)
-2026-02-08T19:46:41.2374673Z (Civitai API only returns accurate stats when querying by imageId)
-2026-02-08T19:46:41.2375236Z   Progress: 50/85 (0 changed)
-2026-02-08T19:46:44.9930824Z   Progress: 85/85 (0 changed)
-2026-02-08T19:46:44.9931316Z 
-2026-02-08T19:46:44.9931923Z Individual stats refresh complete:
-2026-02-08T19:46:44.9932540Z   Stats changed: 0
-2026-02-08T19:46:44.9933004Z   Unchanged: 85
-2026-02-08T19:46:44.9933267Z 
-2026-02-08T19:46:44.9933533Z Total published images: 400
-2026-02-08T19:46:44.9942853Z Reading existing Gist data...
-2026-02-08T19:46:45.2653018Z Successfully read existing data: 13 totalSnapshots, 483 images
-2026-02-08T19:46:45.2654251Z ✓ Loaded existing history successfully
-2026-02-08T19:46:45.2654863Z   Latest snapshot: 2026-02-08T19:29:35.447Z
-2026-02-08T19:46:45.2655434Z   Stats: 10323 likes, 3636 hearts
-2026-02-08T19:46:45.2656008Z   Sample image: 120359560 with 4 snapshots
-2026-02-08T19:46:45.2656846Z 
-2026-02-08T19:46:45.2657211Z Existing data: 13 totalSnapshots, 483 images
-2026-02-08T19:46:45.2687897Z 
-2026-02-08T19:46:45.2688512Z Image history: 399 new, 1 with prior history
-2026-02-08T19:46:45.2688912Z 
-2026-02-08T19:46:45.2689056Z Snapshot created:
-2026-02-08T19:46:45.2689333Z   Images: 400
-2026-02-08T19:46:45.2689566Z   Likes: 1181
-2026-02-08T19:46:45.2689793Z   Hearts: 843
-2026-02-08T19:46:45.2690014Z   Laughs: 67
-2026-02-08T19:46:45.2690232Z   Cries: 7
-2026-02-08T19:46:45.2690504Z   Comments: 9
-2026-02-08T19:46:45.2691591Z 
-2026-02-08T19:46:45.2692053Z Data integrity check:
-2026-02-08T19:46:45.2693918Z   Total snapshots: 14
-2026-02-08T19:46:45.2694351Z   Total image snapshots: 407
-2026-02-08T19:46:45.2694782Z   Images tracked: 400
-2026-02-08T19:46:45.2695365Z ✓ Data integrity check: PASSED
-2026-02-08T19:46:45.2703309Z 
-2026-02-08T19:46:45.2704093Z Updating Gist...
-2026-02-08T19:46:45.2704681Z   Data size: 250.14 KB
-2026-02-08T19:46:45.2705282Z   Total snapshots: 14
-2026-02-08T19:46:45.2705877Z   Images: 400
-2026-02-08T19:46:46.6169113Z ✓ Gist updated successfully
-2026-02-08T19:46:46.6169451Z 
-2026-02-08T19:46:46.6169694Z === Complete ===
-2026-02-08T19:46:46.6301379Z Post job cleanup.
-2026-02-08T19:46:46.7811151Z Cache hit occurred on the primary key node-cache-Linux-x64-npm-429d186920c749401a7da92f26b3a4ced128f45e561b21d2866ac5be23aa9410, not saving cache.
-2026-02-08T19:46:46.7937409Z Post job cleanup.
-2026-02-08T19:46:46.8876408Z [command]/usr/bin/git version
-2026-02-08T19:46:46.8913340Z git version 2.52.0
-2026-02-08T19:46:46.8959023Z Temporarily overriding HOME='/home/runner/work/_temp/e04b32be-b000-40f2-8e42-416105b107f4' before making global git config changes
-2026-02-08T19:46:46.8960587Z Adding repository directory to the temporary git global config as a safe directory
-2026-02-08T19:46:46.8966280Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/civitai-reaction-stats/civitai-reaction-stats
-2026-02-08T19:46:46.9003006Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
-2026-02-08T19:46:46.9036207Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
-2026-02-08T19:46:46.9295534Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
-2026-02-08T19:46:46.9317979Z http.https://github.com/.extraheader
-2026-02-08T19:46:46.9330865Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
-2026-02-08T19:46:46.9364888Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
-2026-02-08T19:46:46.9605370Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
-2026-02-08T19:46:46.9638444Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
-2026-02-08T19:46:46.9996187Z Cleaning up orphan processes
+﻿2026-02-08T20:04:21.8267080Z Current runner version: '2.331.0'
+2026-02-08T20:04:21.8301403Z ##[group]Runner Image Provisioner
+2026-02-08T20:04:21.8302678Z Hosted Compute Agent
+2026-02-08T20:04:21.8303730Z Version: 20260123.484
+2026-02-08T20:04:21.8304700Z Commit: 6bd6555ca37d84114959e1c76d2c01448ff61c5d
+2026-02-08T20:04:21.8305865Z Build Date: 2026-01-23T19:41:17Z
+2026-02-08T20:04:21.8307028Z Worker ID: {477b8b7c-4f9f-443b-8d7a-e19b2ba7f757}
+2026-02-08T20:04:21.8308231Z Azure Region: northcentralus
+2026-02-08T20:04:21.8309142Z ##[endgroup]
+2026-02-08T20:04:21.8311414Z ##[group]Operating System
+2026-02-08T20:04:21.8312327Z Ubuntu
+2026-02-08T20:04:21.8313070Z 24.04.3
+2026-02-08T20:04:21.8313927Z LTS
+2026-02-08T20:04:21.8314666Z ##[endgroup]
+2026-02-08T20:04:21.8315521Z ##[group]Runner Image
+2026-02-08T20:04:21.8316456Z Image: ubuntu-24.04
+2026-02-08T20:04:21.8317289Z Version: 20260201.15.1
+2026-02-08T20:04:21.8319310Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260201.15/images/ubuntu/Ubuntu2404-Readme.md
+2026-02-08T20:04:21.8321924Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260201.15
+2026-02-08T20:04:21.8323423Z ##[endgroup]
+2026-02-08T20:04:21.8325229Z ##[group]GITHUB_TOKEN Permissions
+2026-02-08T20:04:21.8328298Z Contents: read
+2026-02-08T20:04:21.8329146Z Metadata: read
+2026-02-08T20:04:21.8329936Z Packages: read
+2026-02-08T20:04:21.8331012Z ##[endgroup]
+2026-02-08T20:04:21.8333972Z Secret source: Actions
+2026-02-08T20:04:21.8335430Z Prepare workflow directory
+2026-02-08T20:04:21.8712735Z Prepare all required actions
+2026-02-08T20:04:21.8770809Z Getting action download info
+2026-02-08T20:04:22.1650378Z Download action repository 'actions/checkout@v4' (SHA:34e114876b0b11c390a56381ad16ebd13914f8d5)
+2026-02-08T20:04:22.2338052Z Download action repository 'actions/setup-node@v4' (SHA:49933ea5288caeca8642d1e84afbd3f7d6820020)
+2026-02-08T20:04:22.3925740Z Complete job name: collect
+2026-02-08T20:04:22.4523859Z ##[group]Run actions/checkout@v4
+2026-02-08T20:04:22.4524798Z with:
+2026-02-08T20:04:22.4525331Z   repository: trunksn1/civitai-reaction-stats
+2026-02-08T20:04:22.4526105Z   token: ***
+2026-02-08T20:04:22.4526567Z   ssh-strict: true
+2026-02-08T20:04:22.4527060Z   ssh-user: git
+2026-02-08T20:04:22.4527515Z   persist-credentials: true
+2026-02-08T20:04:22.4528061Z   clean: true
+2026-02-08T20:04:22.4528531Z   sparse-checkout-cone-mode: true
+2026-02-08T20:04:22.4529022Z   fetch-depth: 1
+2026-02-08T20:04:22.4529503Z   fetch-tags: false
+2026-02-08T20:04:22.4529981Z   show-progress: true
+2026-02-08T20:04:22.4530850Z   lfs: false
+2026-02-08T20:04:22.4531322Z   submodules: false
+2026-02-08T20:04:22.4531771Z   set-safe-directory: true
+2026-02-08T20:04:22.4532620Z ##[endgroup]
+2026-02-08T20:04:22.5565495Z Syncing repository: trunksn1/civitai-reaction-stats
+2026-02-08T20:04:22.5567404Z ##[group]Getting Git version info
+2026-02-08T20:04:22.5568461Z Working directory is '/home/runner/work/civitai-reaction-stats/civitai-reaction-stats'
+2026-02-08T20:04:22.5569621Z [command]/usr/bin/git version
+2026-02-08T20:04:22.5605167Z git version 2.52.0
+2026-02-08T20:04:22.5629173Z ##[endgroup]
+2026-02-08T20:04:22.5644035Z Temporarily overriding HOME='/home/runner/work/_temp/2d7db8c6-1e1d-440c-ab86-8b8e9c8a8aa1' before making global git config changes
+2026-02-08T20:04:22.5646329Z Adding repository directory to the temporary git global config as a safe directory
+2026-02-08T20:04:22.5658784Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/civitai-reaction-stats/civitai-reaction-stats
+2026-02-08T20:04:22.5691550Z Deleting the contents of '/home/runner/work/civitai-reaction-stats/civitai-reaction-stats'
+2026-02-08T20:04:22.5694572Z ##[group]Initializing the repository
+2026-02-08T20:04:22.5699622Z [command]/usr/bin/git init /home/runner/work/civitai-reaction-stats/civitai-reaction-stats
+2026-02-08T20:04:22.5779651Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-02-08T20:04:22.5781411Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-02-08T20:04:22.5783314Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-02-08T20:04:22.5784686Z hint: call:
+2026-02-08T20:04:22.5785390Z hint:
+2026-02-08T20:04:22.5786270Z hint: 	git config --global init.defaultBranch <name>
+2026-02-08T20:04:22.5787333Z hint:
+2026-02-08T20:04:22.5788352Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-02-08T20:04:22.5790047Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-02-08T20:04:22.5791664Z hint:
+2026-02-08T20:04:22.5792341Z hint: 	git branch -m <name>
+2026-02-08T20:04:22.5793113Z hint:
+2026-02-08T20:04:22.5794305Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-02-08T20:04:22.5796177Z Initialized empty Git repository in /home/runner/work/civitai-reaction-stats/civitai-reaction-stats/.git/
+2026-02-08T20:04:22.5799309Z [command]/usr/bin/git remote add origin https://github.com/trunksn1/civitai-reaction-stats
+2026-02-08T20:04:22.5825143Z ##[endgroup]
+2026-02-08T20:04:22.5826516Z ##[group]Disabling automatic garbage collection
+2026-02-08T20:04:22.5830024Z [command]/usr/bin/git config --local gc.auto 0
+2026-02-08T20:04:22.5853824Z ##[endgroup]
+2026-02-08T20:04:22.5854584Z ##[group]Setting up auth
+2026-02-08T20:04:22.5859923Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-02-08T20:04:22.5884329Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-02-08T20:04:22.6145584Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-02-08T20:04:22.6170940Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-02-08T20:04:22.6348667Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-02-08T20:04:22.6373434Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-02-08T20:04:22.6554533Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-02-08T20:04:22.6582090Z ##[endgroup]
+2026-02-08T20:04:22.6582903Z ##[group]Fetching the repository
+2026-02-08T20:04:22.6698444Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +0a2d6242925a97cc65694abc4681c89ef1320e04:refs/remotes/origin/main
+2026-02-08T20:04:23.0194603Z From https://github.com/trunksn1/civitai-reaction-stats
+2026-02-08T20:04:23.0195944Z  * [new ref]         0a2d6242925a97cc65694abc4681c89ef1320e04 -> origin/main
+2026-02-08T20:04:23.0219766Z ##[endgroup]
+2026-02-08T20:04:23.0220659Z ##[group]Determining the checkout info
+2026-02-08T20:04:23.0221817Z ##[endgroup]
+2026-02-08T20:04:23.0226382Z [command]/usr/bin/git sparse-checkout disable
+2026-02-08T20:04:23.0259848Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-02-08T20:04:23.0282103Z ##[group]Checking out the ref
+2026-02-08T20:04:23.0286630Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
+2026-02-08T20:04:23.0619629Z Switched to a new branch 'main'
+2026-02-08T20:04:23.0620700Z branch 'main' set up to track 'origin/main'.
+2026-02-08T20:04:23.0627016Z ##[endgroup]
+2026-02-08T20:04:23.0659316Z [command]/usr/bin/git log -1 --format=%H
+2026-02-08T20:04:23.0678238Z 0a2d6242925a97cc65694abc4681c89ef1320e04
+2026-02-08T20:04:23.0888732Z ##[group]Run actions/setup-node@v4
+2026-02-08T20:04:23.0889223Z with:
+2026-02-08T20:04:23.0889579Z   node-version: 20
+2026-02-08T20:04:23.0889953Z   cache: npm
+2026-02-08T20:04:23.0890497Z   cache-dependency-path: scripts/package-lock.json
+2026-02-08T20:04:23.0891017Z   always-auth: false
+2026-02-08T20:04:23.0891399Z   check-latest: false
+2026-02-08T20:04:23.0892080Z   token: ***
+2026-02-08T20:04:23.0892428Z ##[endgroup]
+2026-02-08T20:04:23.2540248Z Found in cache @ /opt/hostedtoolcache/node/20.20.0/x64
+2026-02-08T20:04:23.2546072Z ##[group]Environment details
+2026-02-08T20:04:23.5664309Z node: v20.20.0
+2026-02-08T20:04:23.5665232Z npm: 10.8.2
+2026-02-08T20:04:23.5665817Z yarn: 1.22.22
+2026-02-08T20:04:23.5667093Z ##[endgroup]
+2026-02-08T20:04:23.5686661Z [command]/opt/hostedtoolcache/node/20.20.0/x64/bin/npm config get cache
+2026-02-08T20:04:23.6845144Z /home/runner/.npm
+2026-02-08T20:04:23.8364714Z Cache hit for: node-cache-Linux-x64-npm-429d186920c749401a7da92f26b3a4ced128f45e561b21d2866ac5be23aa9410
+2026-02-08T20:04:24.1784517Z Received 785637 of 785637 (100.0%), 3.8 MBs/sec
+2026-02-08T20:04:24.1806819Z Cache Size: ~1 MB (785637 B)
+2026-02-08T20:04:24.1808393Z [command]/usr/bin/tar -xf /home/runner/work/_temp/04a74e7b-da02-4cd0-810a-d2ba0df25612/cache.tzst -P -C /home/runner/work/civitai-reaction-stats/civitai-reaction-stats --use-compress-program unzstd
+2026-02-08T20:04:24.1876942Z Cache restored successfully
+2026-02-08T20:04:24.1883133Z Cache restored from key: node-cache-Linux-x64-npm-429d186920c749401a7da92f26b3a4ced128f45e561b21d2866ac5be23aa9410
+2026-02-08T20:04:24.1994820Z ##[group]Run cd scripts && npm ci
+2026-02-08T20:04:24.1995319Z [36;1mcd scripts && npm ci[0m
+2026-02-08T20:04:24.2025100Z shell: /usr/bin/bash -e {0}
+2026-02-08T20:04:24.2025476Z ##[endgroup]
+2026-02-08T20:04:24.9079570Z 
+2026-02-08T20:04:24.9087561Z added 17 packages, and audited 18 packages in 648ms
+2026-02-08T20:04:24.9087982Z 
+2026-02-08T20:04:24.9088168Z found 0 vulnerabilities
+2026-02-08T20:04:24.9184370Z ##[group]Run node scripts/fetch-stats.js
+2026-02-08T20:04:24.9184726Z [36;1mnode scripts/fetch-stats.js[0m
+2026-02-08T20:04:24.9206305Z shell: /usr/bin/bash -e {0}
+2026-02-08T20:04:24.9206576Z env:
+2026-02-08T20:04:24.9207082Z   GIST_ID: ***
+2026-02-08T20:04:24.9207631Z   GIST_TOKEN: ***
+2026-02-08T20:04:24.9207860Z   CIVITAI_USERNAME: ***
+2026-02-08T20:04:24.9208156Z   CIVITAI_API_KEY: ***
+2026-02-08T20:04:24.9208380Z   REFRESH_TIER: quarterly
+2026-02-08T20:04:24.9208622Z ##[endgroup]
+2026-02-08T20:04:24.9674624Z Using Civitai API key for authenticated requests
+2026-02-08T20:04:24.9687692Z === Civitai Stats Collector ===
+2026-02-08T20:04:24.9689527Z Time: 2026-02-08T20:04:24.968Z
+2026-02-08T20:04:24.9690290Z Username: ***
+2026-02-08T20:04:24.9690553Z 
+2026-02-08T20:04:24.9690850Z Refresh tier override: quarterly (manually triggered)
+2026-02-08T20:04:24.9691086Z 
+2026-02-08T20:04:24.9692400Z Fetching images for user: ***
+2026-02-08T20:04:24.9693818Z   [SFW] Fetching page 1...
+2026-02-08T20:04:26.9015135Z     Retrieved 200 images (total: 200)
+2026-02-08T20:04:27.4019313Z   [SFW] Fetching page 2...
+2026-02-08T20:04:29.0224100Z     Retrieved 200 images (total: 400)
+2026-02-08T20:04:29.5227011Z   [SFW] Fetching page 3...
+2026-02-08T20:04:30.3888062Z     Retrieved 93 images (total: 493)
+2026-02-08T20:04:30.3888760Z   [NSFW] Fetching page 1...
+2026-02-08T20:04:31.3854686Z     Retrieved 200 images (total: 200)
+2026-02-08T20:04:31.8855970Z   [NSFW] Fetching page 2...
+2026-02-08T20:04:32.9954561Z     Retrieved 200 images (total: 400)
+2026-02-08T20:04:33.4949949Z   [NSFW] Fetching page 3...
+2026-02-08T20:04:33.9378084Z     Retrieved 10 images (total: 410)
+2026-02-08T20:04:33.9381166Z 
+2026-02-08T20:04:33.9381821Z Combined: 493 SFW + 410 NSFW = 902 unique images
+2026-02-08T20:04:33.9388545Z 
+2026-02-08T20:04:33.9389396Z Filtered out 20 unpublished/scheduled images (future dates)
+2026-02-08T20:04:33.9390240Z 
+2026-02-08T20:04:33.9390722Z Bulk fetch stats: 676 with reactions, 206 with 0 reactions
+2026-02-08T20:04:33.9394324Z Using manual refresh tier override: quarterly
+2026-02-08T20:04:33.9404491Z 
+2026-02-08T20:04:33.9404989Z Refreshing stats: 882/882 images (tier: quarterly)
+2026-02-08T20:04:33.9405877Z (Civitai API only returns accurate stats when querying by imageId)
+2026-02-08T20:04:38.1402832Z   Progress: 50/882 (50 changed)
+2026-02-08T20:04:42.9919024Z   Progress: 100/882 (95 changed)
+2026-02-08T20:04:48.8877654Z   Progress: 150/882 (127 changed)
+2026-02-08T20:04:54.3028058Z   Progress: 200/882 (135 changed)
+2026-02-08T20:04:59.2904948Z   Progress: 250/882 (146 changed)
+2026-02-08T20:05:04.4326235Z   Progress: 300/882 (146 changed)
+2026-02-08T20:05:09.0434747Z   Progress: 350/882 (153 changed)
+2026-02-08T20:05:15.1526293Z   Progress: 400/882 (154 changed)
+2026-02-08T20:05:20.2707135Z   Progress: 450/882 (160 changed)
+2026-02-08T20:05:25.3825344Z   Progress: 500/882 (161 changed)
+2026-02-08T20:05:29.7802713Z   Progress: 550/882 (161 changed)
+2026-02-08T20:05:34.4326418Z   Progress: 600/882 (161 changed)
+2026-02-08T20:05:39.1407350Z   Progress: 650/882 (161 changed)
+2026-02-08T20:05:43.3934533Z   Progress: 700/882 (161 changed)
+2026-02-08T20:05:47.9812787Z   Progress: 750/882 (161 changed)
+2026-02-08T20:05:52.3607056Z   Progress: 800/882 (161 changed)
+2026-02-08T20:05:56.8216892Z   Progress: 850/882 (161 changed)
+2026-02-08T20:05:59.9782490Z   Progress: 882/882 (161 changed)
+2026-02-08T20:05:59.9782892Z 
+2026-02-08T20:05:59.9783168Z Individual stats refresh complete:
+2026-02-08T20:05:59.9783565Z   Stats changed: 161
+2026-02-08T20:05:59.9783894Z   Unchanged: 721
+2026-02-08T20:05:59.9784105Z 
+2026-02-08T20:05:59.9784285Z Total published images: 882
+2026-02-08T20:05:59.9784687Z Reading existing Gist data...
+2026-02-08T20:06:00.4226223Z Successfully read existing data: 13 totalSnapshots, 882 images
+2026-02-08T20:06:00.4227202Z ✓ Loaded existing history successfully
+2026-02-08T20:06:00.4227775Z   Latest snapshot: 2026-02-08T20:02:47.696Z
+2026-02-08T20:06:00.4228296Z   Stats: 11509 likes, 4485 hearts
+2026-02-08T20:06:00.4229175Z   Sample image: 120359560 with 5 snapshots
+2026-02-08T20:06:00.4229462Z 
+2026-02-08T20:06:00.4229774Z Existing data: 13 totalSnapshots, 882 images
+2026-02-08T20:06:00.4414092Z 
+2026-02-08T20:06:00.4414694Z Image history: 399 new, 483 with prior history
+2026-02-08T20:06:00.4415052Z 
+2026-02-08T20:06:00.4415218Z Snapshot created:
+2026-02-08T20:06:00.4415587Z   Images: 882
+2026-02-08T20:06:00.4415993Z   Likes: 11509
+2026-02-08T20:06:00.4416297Z   Hearts: 4486
+2026-02-08T20:06:00.4416560Z   Laughs: 1979
+2026-02-08T20:06:00.4416818Z   Cries: 512
+2026-02-08T20:06:00.4417072Z   Comments: 106
+2026-02-08T20:06:00.4420940Z 
+2026-02-08T20:06:00.4421818Z Data integrity check:
+2026-02-08T20:06:00.4422560Z   Total snapshots: 14
+2026-02-08T20:06:00.4423272Z   Total image snapshots: 4363
+2026-02-08T20:06:00.4424447Z   Images tracked: 882
+2026-02-08T20:06:00.4425258Z ✓ Data integrity check: PASSED
+2026-02-08T20:06:00.4465396Z 
+2026-02-08T20:06:00.4465819Z Updating Gist...
+2026-02-08T20:06:00.4466286Z   Data size: 853.24 KB
+2026-02-08T20:06:00.4466728Z   Total snapshots: 14
+2026-02-08T20:06:00.4467105Z   Images: 882
+2026-02-08T20:06:02.1003137Z ✓ Gist updated successfully
+2026-02-08T20:06:02.1003498Z 
+2026-02-08T20:06:02.1003642Z === Complete ===
+2026-02-08T20:06:02.1124253Z Post job cleanup.
+2026-02-08T20:06:02.2588067Z Cache hit occurred on the primary key node-cache-Linux-x64-npm-429d186920c749401a7da92f26b3a4ced128f45e561b21d2866ac5be23aa9410, not saving cache.
+2026-02-08T20:06:02.2689895Z Post job cleanup.
+2026-02-08T20:06:02.3553369Z [command]/usr/bin/git version
+2026-02-08T20:06:02.3586024Z git version 2.52.0
+2026-02-08T20:06:02.3623865Z Temporarily overriding HOME='/home/runner/work/_temp/2d84015f-9f0b-46b4-811d-b676d9fcace1' before making global git config changes
+2026-02-08T20:06:02.3624739Z Adding repository directory to the temporary git global config as a safe directory
+2026-02-08T20:06:02.3629212Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/civitai-reaction-stats/civitai-reaction-stats
+2026-02-08T20:06:02.3667411Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-02-08T20:06:02.3695646Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-02-08T20:06:02.3878164Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-02-08T20:06:02.3895933Z http.https://github.com/.extraheader
+2026-02-08T20:06:02.3907299Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-02-08T20:06:02.3932850Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-02-08T20:06:02.4113315Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-02-08T20:06:02.4143447Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-02-08T20:06:02.4444955Z Cleaning up orphan processes
