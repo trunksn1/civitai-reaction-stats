@@ -71,9 +71,10 @@ async function fetchGistData() {
  */
 async function getSettings() {
   return new Promise((resolve) => {
-    chrome.storage.sync.get(['gistUrl'], (result) => {
+    chrome.storage.sync.get(['gistUrl', 'chartColors'], (result) => {
       resolve({
-        gistUrl: result.gistUrl || ''
+        gistUrl: result.gistUrl || '',
+        chartColors: result.chartColors || null
       });
     });
   });

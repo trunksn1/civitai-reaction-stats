@@ -74,17 +74,20 @@ function resolveSnapshots(snapshots) {
   return result;
 }
 
-// Colors matching Civitai's palette
-const CHART_COLORS = {
+// Default colors matching Civitai's palette
+const DEFAULT_CHART_COLORS = {
   total: '#be4bdb',
   likes: '#228be6',
   hearts: '#f06595',
   laughs: '#fcc419',
   cries: '#748ffc',
   comments: '#69db7c',
-  buzz: '#fab005',
+  buzz: '#ff922b',
   collects: '#20c997'
 };
+
+// Active colors (may be overridden by user)
+const CHART_COLORS = { ...DEFAULT_CHART_COLORS };
 
 // DOM Elements
 const loadingEl = document.getElementById('loading');
@@ -99,7 +102,9 @@ const retryBtn = document.getElementById('retryBtn');
  * Initialize the stats page
  */
 async function init() {
+  await loadCustomColors();
   setupEventListeners();
+  setupColorSettings();
   await loadData();
 }
 
@@ -353,7 +358,7 @@ function getChartData() {
       borderColor: CHART_COLORS.total,
       backgroundColor: CHART_COLORS.total + '20',
       borderWidth: 2,
-      tension: 0.3,
+      tension: 0,
       fill: false,
       pointRadius: snapshots.length > 50 ? 0 : 3,
       pointHoverRadius: 5
@@ -367,7 +372,7 @@ function getChartData() {
       borderColor: CHART_COLORS.likes,
       backgroundColor: CHART_COLORS.likes + '20',
       borderWidth: 2,
-      tension: 0.3,
+      tension: 0,
       fill: false,
       pointRadius: snapshots.length > 50 ? 0 : 3,
       pointHoverRadius: 5
@@ -381,7 +386,7 @@ function getChartData() {
       borderColor: CHART_COLORS.hearts,
       backgroundColor: CHART_COLORS.hearts + '20',
       borderWidth: 2,
-      tension: 0.3,
+      tension: 0,
       fill: false,
       pointRadius: snapshots.length > 50 ? 0 : 3,
       pointHoverRadius: 5
@@ -395,7 +400,7 @@ function getChartData() {
       borderColor: CHART_COLORS.laughs,
       backgroundColor: CHART_COLORS.laughs + '20',
       borderWidth: 2,
-      tension: 0.3,
+      tension: 0,
       fill: false,
       pointRadius: snapshots.length > 50 ? 0 : 3,
       pointHoverRadius: 5
@@ -409,7 +414,7 @@ function getChartData() {
       borderColor: CHART_COLORS.cries,
       backgroundColor: CHART_COLORS.cries + '20',
       borderWidth: 2,
-      tension: 0.3,
+      tension: 0,
       fill: false,
       pointRadius: snapshots.length > 50 ? 0 : 3,
       pointHoverRadius: 5
@@ -423,7 +428,7 @@ function getChartData() {
       borderColor: CHART_COLORS.buzz,
       backgroundColor: CHART_COLORS.buzz + '20',
       borderWidth: 2,
-      tension: 0.3,
+      tension: 0,
       fill: false,
       pointRadius: snapshots.length > 50 ? 0 : 3,
       pointHoverRadius: 5
@@ -437,7 +442,7 @@ function getChartData() {
       borderColor: CHART_COLORS.collects,
       backgroundColor: CHART_COLORS.collects + '20',
       borderWidth: 2,
-      tension: 0.3,
+      tension: 0,
       fill: false,
       pointRadius: snapshots.length > 50 ? 0 : 3,
       pointHoverRadius: 5
@@ -624,7 +629,7 @@ function renderImageChart(image, timeRange) {
       borderColor: CHART_COLORS.total,
       backgroundColor: CHART_COLORS.total + '20',
       borderWidth: 2,
-      tension: 0.3,
+      tension: 0,
       fill: false,
       pointRadius: snapshots.length > 30 ? 0 : 2,
       pointHoverRadius: 4
@@ -637,7 +642,7 @@ function renderImageChart(image, timeRange) {
       data: snapshots.map(s => s.likes || 0),
       borderColor: CHART_COLORS.likes,
       borderWidth: 1.5,
-      tension: 0.3,
+      tension: 0,
       fill: false,
       pointRadius: 0,
       pointHoverRadius: 3
@@ -650,7 +655,7 @@ function renderImageChart(image, timeRange) {
       data: snapshots.map(s => s.hearts || 0),
       borderColor: CHART_COLORS.hearts,
       borderWidth: 1.5,
-      tension: 0.3,
+      tension: 0,
       fill: false,
       pointRadius: 0,
       pointHoverRadius: 3
@@ -663,7 +668,7 @@ function renderImageChart(image, timeRange) {
       data: snapshots.map(s => s.laughs || 0),
       borderColor: CHART_COLORS.laughs,
       borderWidth: 1.5,
-      tension: 0.3,
+      tension: 0,
       fill: false,
       pointRadius: 0,
       pointHoverRadius: 3
@@ -676,7 +681,7 @@ function renderImageChart(image, timeRange) {
       data: snapshots.map(s => s.cries || 0),
       borderColor: CHART_COLORS.cries,
       borderWidth: 1.5,
-      tension: 0.3,
+      tension: 0,
       fill: false,
       pointRadius: 0,
       pointHoverRadius: 3
@@ -689,7 +694,7 @@ function renderImageChart(image, timeRange) {
       data: snapshots.map(s => s.buzz || 0),
       borderColor: CHART_COLORS.buzz,
       borderWidth: 1.5,
-      tension: 0.3,
+      tension: 0,
       fill: false,
       pointRadius: 0,
       pointHoverRadius: 3
@@ -702,7 +707,7 @@ function renderImageChart(image, timeRange) {
       data: snapshots.map(s => s.collects || 0),
       borderColor: CHART_COLORS.collects,
       borderWidth: 1.5,
-      tension: 0.3,
+      tension: 0,
       fill: false,
       pointRadius: 0,
       pointHoverRadius: 3
@@ -969,6 +974,122 @@ function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str;
   return div.innerHTML;
+}
+
+/**
+ * Load custom colors from storage and apply them
+ */
+async function loadCustomColors() {
+  try {
+    const response = await chrome.runtime.sendMessage({ action: 'getSettings' });
+    if (response.success && response.settings.chartColors) {
+      const custom = response.settings.chartColors;
+      for (const key of Object.keys(DEFAULT_CHART_COLORS)) {
+        if (custom[key]) {
+          CHART_COLORS[key] = custom[key];
+        }
+      }
+    }
+  } catch (e) {
+    // Silently use defaults
+  }
+  applyCSSColors();
+}
+
+/**
+ * Apply CHART_COLORS to CSS custom properties
+ */
+function applyCSSColors() {
+  const root = document.documentElement;
+  for (const [key, color] of Object.entries(CHART_COLORS)) {
+    root.style.setProperty(`--color-${key}`, color);
+  }
+}
+
+/**
+ * Set up color settings panel interactions
+ */
+function setupColorSettings() {
+  const btn = document.getElementById('colorSettingsBtn');
+  const panel = document.getElementById('colorSettingsPanel');
+  const resetBtn = document.getElementById('resetColorsBtn');
+
+  // Sync color inputs with current CHART_COLORS
+  for (const key of Object.keys(DEFAULT_CHART_COLORS)) {
+    const input = document.getElementById(`color-${key}`);
+    if (input) {
+      input.value = CHART_COLORS[key];
+    }
+  }
+
+  // Toggle panel
+  btn.addEventListener('click', () => {
+    const isVisible = panel.classList.contains('visible');
+    panel.classList.toggle('visible');
+    btn.classList.toggle('active');
+  });
+
+  // Color change handlers
+  panel.querySelectorAll('input[type="color"]').forEach(input => {
+    input.addEventListener('input', () => {
+      const line = input.dataset.line;
+      CHART_COLORS[line] = input.value;
+      applyCSSColors();
+      if (overviewChart) updateChart();
+      // Re-render any open image charts
+      imageCharts.forEach((chart, imageId) => {
+        const image = statsData?.images?.find(img => img.id === imageId);
+        if (image) {
+          const timeRange = imageTimeRanges.get(imageId) || '7d';
+          renderImageChart(image, timeRange);
+        }
+      });
+    });
+
+    // Save on change (when user releases the picker)
+    input.addEventListener('change', () => {
+      saveCustomColors();
+    });
+  });
+
+  // Reset button
+  resetBtn.addEventListener('click', () => {
+    for (const key of Object.keys(DEFAULT_CHART_COLORS)) {
+      CHART_COLORS[key] = DEFAULT_CHART_COLORS[key];
+      const input = document.getElementById(`color-${key}`);
+      if (input) input.value = DEFAULT_CHART_COLORS[key];
+    }
+    applyCSSColors();
+    if (overviewChart) updateChart();
+    imageCharts.forEach((chart, imageId) => {
+      const image = statsData?.images?.find(img => img.id === imageId);
+      if (image) {
+        const timeRange = imageTimeRanges.get(imageId) || '7d';
+        renderImageChart(image, timeRange);
+      }
+    });
+    // Clear from storage
+    chrome.runtime.sendMessage({
+      action: 'saveSettings',
+      settings: { chartColors: null }
+    });
+  });
+}
+
+/**
+ * Save custom colors to storage (only non-default values)
+ */
+function saveCustomColors() {
+  const custom = {};
+  for (const [key, defaultColor] of Object.entries(DEFAULT_CHART_COLORS)) {
+    if (CHART_COLORS[key] !== defaultColor) {
+      custom[key] = CHART_COLORS[key];
+    }
+  }
+  chrome.runtime.sendMessage({
+    action: 'saveSettings',
+    settings: { chartColors: Object.keys(custom).length > 0 ? custom : null }
+  });
 }
 
 // Initialize on load
