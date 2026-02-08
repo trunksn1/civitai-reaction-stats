@@ -11,7 +11,9 @@
       "WebFetch(domain:api.github.com)",
       "Bash(curl:*)",
       "Bash(node -e:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "WebFetch(domain:wiki.civitai.com)",
+      "WebFetch(domain:feedback.civitai.com)"
     ]
   }
 }

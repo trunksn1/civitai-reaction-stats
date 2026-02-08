@@ -119,8 +119,16 @@ function setupEventListeners() {
 
   // Sort selector
   document.getElementById('sortSelect').addEventListener('change', (e) => {
+    const reactionTypeSelect = document.getElementById('reactionTypeSelect');
+    reactionTypeSelect.style.display = e.target.value === 'reactions' ? '' : 'none';
     displayedImages = IMAGES_PER_PAGE;
     renderImages(e.target.value);
+  });
+
+  // Reaction type selector
+  document.getElementById('reactionTypeSelect').addEventListener('change', () => {
+    displayedImages = IMAGES_PER_PAGE;
+    renderImages(document.getElementById('sortSelect').value);
   });
 
   // Load more button
@@ -706,12 +714,13 @@ function sortImages(images, sortBy) {
   switch (sortBy) {
     case 'oldest':
       return images.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-    case 'reactions':
-      return images.sort((a, b) => {
-        const aTotal = getTotalReactions(getCurrentStats(a));
-        const bTotal = getTotalReactions(getCurrentStats(b));
-        return bTotal - aTotal;
-      });
+    case 'reactions': {
+      const reactionType = document.getElementById('reactionTypeSelect')?.value || 'total';
+      if (reactionType === 'total') {
+        return images.sort((a, b) => getTotalReactions(getCurrentStats(b)) - getTotalReactions(getCurrentStats(a)));
+      }
+      return images.sort((a, b) => (getCurrentStats(b)[reactionType] || 0) - (getCurrentStats(a)[reactionType] || 0));
+    }
     case 'comments':
       return images.sort((a, b) => (getCurrentStats(b).comments || 0) - (getCurrentStats(a).comments || 0));
     case 'newest':
