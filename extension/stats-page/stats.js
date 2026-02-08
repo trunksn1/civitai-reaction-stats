@@ -20,6 +20,7 @@ const IMAGES_PER_PAGE = 10;
 // Track per-image chart state
 const imageCharts = new Map(); // Map<imageId, Chart>
 const imageTimeRanges = new Map(); // Map<imageId, timeRange>
+const imageVisibleLines = new Map(); // Map<imageId, {total,likes,hearts,laughs,cries}>
 
 // Emoji labels for chart tooltips
 const LABEL_EMOJI = {
@@ -399,6 +400,7 @@ function renderImages(sortBy = 'newest') {
   imageCharts.forEach(chart => chart.destroy());
   imageCharts.clear();
   imageTimeRanges.clear();
+  imageVisibleLines.clear();
 
   // Update count
   document.getElementById('imageCount').textContent = `${images.length} images`;
@@ -445,6 +447,28 @@ function setupImageChartListeners(images) {
             renderImageChart(image, timeRange);
           }
         }
+      }
+    });
+  });
+
+  // Per-image line toggles
+  document.querySelectorAll('.image-line-toggles input').forEach(checkbox => {
+    checkbox.addEventListener('change', () => {
+      const imageId = checkbox.dataset.imageId;
+      const line = checkbox.dataset.line;
+
+      // Initialize visibility state if needed
+      if (!imageVisibleLines.has(imageId)) {
+        imageVisibleLines.set(imageId, { total: true, likes: true, hearts: true, laughs: true, cries: true });
+      }
+
+      imageVisibleLines.get(imageId)[line] = checkbox.checked;
+
+      // Re-render chart
+      const image = images.find(img => img.id === imageId);
+      if (image) {
+        const timeRange = imageTimeRanges.get(imageId) || '7d';
+        renderImageChart(image, timeRange);
       }
     });
   });
@@ -505,43 +529,82 @@ function renderImageChart(image, timeRange) {
 
   const labels = snapshots.map(s => formatChartDate(new Date(s.timestamp), timeRange));
 
+  // Get per-image visibility (default all visible)
+  const vis = imageVisibleLines.get(image.id) || { total: true, likes: true, hearts: true, laughs: true, cries: true };
+
+  const datasets = [];
+
+  if (vis.total) {
+    datasets.push({
+      label: 'Total',
+      data: snapshots.map(s => (s.likes || 0) + (s.hearts || 0) + (s.laughs || 0) + (s.cries || 0)),
+      borderColor: CHART_COLORS.total,
+      backgroundColor: CHART_COLORS.total + '20',
+      borderWidth: 2,
+      tension: 0.3,
+      fill: false,
+      pointRadius: snapshots.length > 30 ? 0 : 2,
+      pointHoverRadius: 4
+    });
+  }
+
+  if (vis.likes) {
+    datasets.push({
+      label: 'Likes',
+      data: snapshots.map(s => s.likes || 0),
+      borderColor: CHART_COLORS.likes,
+      borderWidth: 1.5,
+      tension: 0.3,
+      fill: false,
+      pointRadius: 0,
+      pointHoverRadius: 3
+    });
+  }
+
+  if (vis.hearts) {
+    datasets.push({
+      label: 'Hearts',
+      data: snapshots.map(s => s.hearts || 0),
+      borderColor: CHART_COLORS.hearts,
+      borderWidth: 1.5,
+      tension: 0.3,
+      fill: false,
+      pointRadius: 0,
+      pointHoverRadius: 3
+    });
+  }
+
+  if (vis.laughs) {
+    datasets.push({
+      label: 'Laughs',
+      data: snapshots.map(s => s.laughs || 0),
+      borderColor: CHART_COLORS.laughs,
+      borderWidth: 1.5,
+      tension: 0.3,
+      fill: false,
+      pointRadius: 0,
+      pointHoverRadius: 3
+    });
+  }
+
+  if (vis.cries) {
+    datasets.push({
+      label: 'Cries',
+      data: snapshots.map(s => s.cries || 0),
+      borderColor: CHART_COLORS.cries,
+      borderWidth: 1.5,
+      tension: 0.3,
+      fill: false,
+      pointRadius: 0,
+      pointHoverRadius: 3
+    });
+  }
+
   const chart = new Chart(ctx, {
     type: 'line',
     data: {
       labels,
-      datasets: [
-        {
-          label: 'Total',
-          data: snapshots.map(s => (s.likes || 0) + (s.hearts || 0) + (s.laughs || 0) + (s.cries || 0)),
-          borderColor: CHART_COLORS.total,
-          backgroundColor: CHART_COLORS.total + '20',
-          borderWidth: 2,
-          tension: 0.3,
-          fill: false,
-          pointRadius: snapshots.length > 30 ? 0 : 2,
-          pointHoverRadius: 4
-        },
-        {
-          label: 'Likes',
-          data: snapshots.map(s => s.likes || 0),
-          borderColor: CHART_COLORS.likes,
-          borderWidth: 1.5,
-          tension: 0.3,
-          fill: false,
-          pointRadius: 0,
-          pointHoverRadius: 3
-        },
-        {
-          label: 'Hearts',
-          data: snapshots.map(s => s.hearts || 0),
-          borderColor: CHART_COLORS.hearts,
-          borderWidth: 1.5,
-          tension: 0.3,
-          fill: false,
-          pointRadius: 0,
-          pointHoverRadius: 3
-        }
-      ]
+      datasets
     },
     options: {
       responsive: true,
@@ -670,23 +733,23 @@ function createImageCard(image) {
           <div class="image-date">${date}</div>
           <div class="image-stats">
             <span class="stat-badge likes">
-              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>
+              &#x1F44D;
               ${formatNumber(stats.likes || 0)}
             </span>
             <span class="stat-badge hearts">
-              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+              &#x2764;&#xFE0F;
               ${formatNumber(stats.hearts || 0)}
             </span>
             <span class="stat-badge laughs">
-              <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>
+              &#x1F604;
               ${formatNumber(stats.laughs || 0)}
             </span>
             <span class="stat-badge cries">
-              <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>
+              &#x1F622;
               ${formatNumber(stats.cries || 0)}
             </span>
             <span class="stat-badge comments">
-              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              &#x1F4AC;
               ${formatNumber(stats.comments || 0)}
             </span>
           </div>
@@ -701,6 +764,13 @@ function createImageCard(image) {
         </button>
         <div class="image-chart-container" id="chart-container-${escapeHtml(image.id)}">
           <div class="image-chart-controls">
+            <div class="image-line-toggles" data-image-id="${escapeHtml(image.id)}">
+              <label class="toggle-label"><input type="checkbox" data-line="total" data-image-id="${escapeHtml(image.id)}" checked><span class="toggle-dot total"></span>&#x1F310;</label>
+              <label class="toggle-label"><input type="checkbox" data-line="likes" data-image-id="${escapeHtml(image.id)}" checked><span class="toggle-dot likes"></span>&#x1F44D;</label>
+              <label class="toggle-label"><input type="checkbox" data-line="hearts" data-image-id="${escapeHtml(image.id)}" checked><span class="toggle-dot hearts"></span>&#x2764;&#xFE0F;</label>
+              <label class="toggle-label"><input type="checkbox" data-line="laughs" data-image-id="${escapeHtml(image.id)}" checked><span class="toggle-dot laughs"></span>&#x1F604;</label>
+              <label class="toggle-label"><input type="checkbox" data-line="cries" data-image-id="${escapeHtml(image.id)}" checked><span class="toggle-dot cries"></span>&#x1F622;</label>
+            </div>
             <div class="image-time-selector">
               <button class="image-time-btn" data-range="1d" data-image-id="${escapeHtml(image.id)}">1D</button>
               <button class="image-time-btn active" data-range="7d" data-image-id="${escapeHtml(image.id)}">7D</button>

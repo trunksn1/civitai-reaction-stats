@@ -573,8 +573,24 @@ body {
 .image-chart-controls {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
   margin-bottom: 8px;
+  gap: 8px;
+}
+
+.image-line-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.image-line-toggles .toggle-label {
+  font-size: 11px;
+}
+
+.image-line-toggles .toggle-dot {
+  width: 10px;
+  height: 10px;
 }
 
 .image-time-selector {
