@@ -26,7 +26,6 @@
   --color-total: #be4bdb;
   --color-buzz: #fab005;
   --color-collects: #20c997;
-  --color-views: #868e96;
 }
 
 body {
@@ -258,11 +257,6 @@ body {
 .card-icon.collects {
   background-color: rgba(32, 201, 151, 0.15);
   color: var(--color-collects);
-}
-
-.card-icon.views {
-  background-color: rgba(134, 142, 150, 0.15);
-  color: var(--color-views);
 }
 
 .card-content {
@@ -532,7 +526,6 @@ body {
 .stat-badge.comments svg { color: var(--color-comments); }
 .stat-badge.buzz { color: var(--color-buzz); }
 .stat-badge.collects { color: var(--color-collects); }
-.stat-badge.views { color: var(--color-views); }
 
 /* Load More */
 .load-more-container {

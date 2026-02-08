@@ -83,28 +83,12 @@ function sleep(ms) {
  * The tRPC endpoint returns additional fields (buzz, collects, views)
  * that the public REST API does not expose.
  */
-async function fetchImageStats(imageId, nsfwLevel) {
-  // Map NSFW level names to the numeric browsingLevel bitmask used by tRPC
-  const nsfwLevelMap = { 'None': 1, 'Soft': 2, 'Mature': 4, 'X': 8 };
-  const browsingLevel = nsfwLevelMap[nsfwLevel] || 1;
-  const input = {
-    json: {
-      limit: 1,
-      cursor: undefined,
-      browsingLevel,
-      useIndex: true,
-      imageId: Number(imageId),
-      period: "AllTime",
-      sort: "Newest",
-      types: ["image"],
-      withMeta: false,
-      pending: false
-    }
-  };
-  const url = `https://civitai.com/api/trpc/image.getInfinite?input=${encodeURIComponent(JSON.stringify(input))}`;
+async function fetchImageStats(imageId) {
+  const input = { json: { id: Number(imageId) } };
+  const url = `https://civitai.com/api/trpc/image.get?input=${encodeURIComponent(JSON.stringify(input))}`;
   try {
     const data = await fetchWithRetry(url);
-    const item = data?.result?.data?.json?.items?.[0];
+    const item = data?.result?.data?.json;
     if (item && item.stats) {
       const s = item.stats;
       return {
@@ -205,7 +189,7 @@ async function refreshImageStats(images) {
     const batch = refreshList.slice(i, i + STATS_BATCH_SIZE);
 
     const results = await Promise.all(
-      batch.map(img => fetchImageStats(img.id, img.nsfwLevel))
+      batch.map(img => fetchImageStats(img.id))
     );
 
     for (let j = 0; j < batch.length; j++) {

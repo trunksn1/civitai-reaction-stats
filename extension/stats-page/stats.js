@@ -32,8 +32,7 @@ const LABEL_EMOJI = {
   'Laughs': '\u{1F604}',     // 😄
   'Cries': '\u{1F622}',      // 😢
   'Buzz': '\u26A1',           // ⚡
-  'Collects': '\u{1F516}',   // 🔖
-  'Views': '\u{1F441}'       // 👁
+  'Collects': '\u{1F516}'    // 🔖
 };
 
 /**
@@ -84,8 +83,7 @@ const CHART_COLORS = {
   cries: '#748ffc',
   comments: '#69db7c',
   buzz: '#fab005',
-  collects: '#20c997',
-  views: '#868e96'
+  collects: '#20c997'
 };
 
 // DOM Elements
@@ -245,7 +243,6 @@ function renderSummaryCards() {
   document.getElementById('totalComments').textContent = (latest.comments || 0).toLocaleString();
   document.getElementById('totalBuzz').textContent = (latest.buzz || 0).toLocaleString();
   document.getElementById('totalCollects').textContent = (latest.collects || 0).toLocaleString();
-  document.getElementById('totalViews').textContent = (latest.views || 0).toLocaleString();
 }
 
 /**
@@ -873,10 +870,6 @@ function createImageCard(image) {
             <span class="stat-badge collects">
               &#x1F516;
               ${formatNumber(stats.collects || 0)}
-            </span>
-            <span class="stat-badge views">
-              &#x1F441;
-              ${formatNumber(stats.views || 0)}
             </span>
           </div>
         </div>
