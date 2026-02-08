@@ -31,6 +31,39 @@ const LABEL_EMOJI = {
   'Cries': '\u{1F622}'       // 😢
 };
 
+/**
+ * Resolve delta-encoded snapshots back to absolute values.
+ * Absolute snapshots pass through unchanged; delta snapshots (with d* keys)
+ * are accumulated on top of the previous absolute values.
+ */
+function resolveSnapshots(snapshots) {
+  if (!snapshots || snapshots.length === 0) return [];
+  const result = [];
+  let current = { likes: 0, hearts: 0, laughs: 0, cries: 0, comments: 0 };
+
+  for (const s of snapshots) {
+    if ('dl' in s || 'dh' in s || 'dla' in s || 'dc' in s || 'dco' in s) {
+      current = {
+        likes: current.likes + (s.dl || 0),
+        hearts: current.hearts + (s.dh || 0),
+        laughs: current.laughs + (s.dla || 0),
+        cries: current.cries + (s.dc || 0),
+        comments: current.comments + (s.dco || 0)
+      };
+    } else {
+      current = {
+        likes: s.likes || 0,
+        hearts: s.hearts || 0,
+        laughs: s.laughs || 0,
+        cries: s.cries || 0,
+        comments: s.comments || 0
+      };
+    }
+    result.push({ timestamp: s.timestamp, ...current });
+  }
+  return result;
+}
+
 // Colors matching Civitai's palette
 const CHART_COLORS = {
   total: '#be4bdb',
@@ -175,7 +208,7 @@ function renderStats() {
  * Render summary cards with current totals
  */
 function renderSummaryCards() {
-  const snapshots = statsData.totalSnapshots || [];
+  const snapshots = resolveSnapshots(statsData.totalSnapshots || []);
   const latest = snapshots[snapshots.length - 1] || {};
 
   const total = (latest.likes || 0) + (latest.hearts || 0) +
@@ -285,7 +318,7 @@ function updateChart() {
  * Get chart data based on current time range and visible lines
  */
 function getChartData() {
-  const snapshots = filterByTimeRange(statsData.totalSnapshots || []);
+  const snapshots = filterByTimeRange(resolveSnapshots(statsData.totalSnapshots || []));
 
   const labels = snapshots.map(s => formatChartDate(new Date(s.timestamp), currentTimeRange));
 
@@ -510,7 +543,7 @@ function renderImageChart(image, timeRange) {
     imageCharts.get(image.id).destroy();
   }
 
-  const snapshots = filterByTimeRange(image.snapshots || [], timeRange);
+  const snapshots = filterByTimeRange(resolveSnapshots(image.snapshots || []), timeRange);
 
   if (snapshots.length < 2) {
     // Not enough data points
@@ -691,9 +724,10 @@ function sortImages(images, sortBy) {
  * Get current stats from an image (latest snapshot or legacy currentStats)
  */
 function getCurrentStats(image) {
-  // Support new snapshots format
+  // Support new snapshots format — resolve deltas to get absolute values
   if (image.snapshots && image.snapshots.length > 0) {
-    return image.snapshots[image.snapshots.length - 1];
+    const resolved = resolveSnapshots(image.snapshots);
+    return resolved[resolved.length - 1];
   }
   // Fallback to legacy format
   return image.currentStats || { likes: 0, hearts: 0, laughs: 0, cries: 0, comments: 0 };

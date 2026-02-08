@@ -493,6 +493,100 @@ function applyRetentionPolicy(snapshots) {
 }
 
 /**
+ * Check if a snapshot is delta-encoded (has any d* keys)
+ */
+function isDelta(snapshot) {
+  return snapshot && ('dl' in snapshot || 'dh' in snapshot ||
+         'dla' in snapshot || 'dc' in snapshot || 'dco' in snapshot);
+}
+
+/**
+ * Resolve a single snapshot at a given index to absolute values
+ * by walking backward to find the nearest absolute snapshot and applying deltas forward
+ */
+function resolveSnapshot(snapshots, index) {
+  let base = { likes: 0, hearts: 0, laughs: 0, cries: 0, comments: 0 };
+  let startIdx = 0;
+
+  for (let i = index; i >= 0; i--) {
+    if (!isDelta(snapshots[i])) {
+      base = {
+        likes: snapshots[i].likes || 0,
+        hearts: snapshots[i].hearts || 0,
+        laughs: snapshots[i].laughs || 0,
+        cries: snapshots[i].cries || 0,
+        comments: snapshots[i].comments || 0
+      };
+      startIdx = i + 1;
+      break;
+    }
+  }
+
+  for (let i = startIdx; i <= index; i++) {
+    const s = snapshots[i];
+    if (isDelta(s)) {
+      base.likes += s.dl || 0;
+      base.hearts += s.dh || 0;
+      base.laughs += s.dla || 0;
+      base.cries += s.dc || 0;
+      base.comments += s.dco || 0;
+    }
+  }
+
+  return { timestamp: snapshots[index].timestamp, ...base };
+}
+
+/**
+ * Resolve all snapshots in an array to absolute values
+ */
+function resolveAllSnapshots(snapshots) {
+  const result = [];
+  let current = { likes: 0, hearts: 0, laughs: 0, cries: 0, comments: 0 };
+
+  for (const s of snapshots) {
+    if (isDelta(s)) {
+      current = {
+        likes: current.likes + (s.dl || 0),
+        hearts: current.hearts + (s.dh || 0),
+        laughs: current.laughs + (s.dla || 0),
+        cries: current.cries + (s.dc || 0),
+        comments: current.comments + (s.dco || 0)
+      };
+    } else {
+      current = {
+        likes: s.likes || 0,
+        hearts: s.hearts || 0,
+        laughs: s.laughs || 0,
+        cries: s.cries || 0,
+        comments: s.comments || 0
+      };
+    }
+    result.push({ timestamp: s.timestamp, ...current });
+  }
+  return result;
+}
+
+/**
+ * Encode an array of absolute snapshots as deltas (first stays absolute, rest become deltas)
+ */
+function encodeAsDeltas(absoluteSnapshots) {
+  if (absoluteSnapshots.length === 0) return [];
+  const result = [absoluteSnapshots[0]];
+  for (let i = 1; i < absoluteSnapshots.length; i++) {
+    const prev = absoluteSnapshots[i - 1];
+    const curr = absoluteSnapshots[i];
+    const delta = { timestamp: curr.timestamp };
+    if (curr.likes - prev.likes) delta.dl = curr.likes - prev.likes;
+    if (curr.hearts - prev.hearts) delta.dh = curr.hearts - prev.hearts;
+    if (curr.laughs - prev.laughs) delta.dla = curr.laughs - prev.laughs;
+    if (curr.cries - prev.cries) delta.dc = curr.cries - prev.cries;
+    if (curr.comments - prev.comments) delta.dco = curr.comments - prev.comments;
+    result.push(delta);
+  }
+  return result;
+}
+
+/**
  * Process images and create current snapshot
  * Merges new snapshot data with existing image snapshots
  */
@@ -522,22 +616,14 @@ function processImages(apiImages, existingImages = []) {
     totalCries += cries;
     totalComments += comments;
 
-    // Create new snapshot for this image
-    const newSnapshot = {
-      timestamp,
-      likes,
-      hearts,
-      laughs,
-      cries,
-      comments
-    };
-
     // Get existing image data if available
     const existingImage = existingImageMap.get(String(img.id));
-
-    // Merge with existing snapshots - only add if values changed
     let snapshots = existingImage?.snapshots || [];
-    const lastSnapshot = snapshots[snapshots.length - 1];
+
+    // Determine previous absolute values (resolve last snapshot if it's a delta)
+    const lastSnapshot = snapshots.length > 0
+      ? resolveSnapshot(snapshots, snapshots.length - 1)
+      : null;
 
     // Only store new snapshot if reactions actually changed (or it's the first snapshot)
     const hasChanged = !lastSnapshot ||
@@ -548,11 +634,27 @@ function processImages(apiImages, existingImages = []) {
       lastSnapshot.comments !== comments;
 
     if (hasChanged) {
-      snapshots.push(newSnapshot);
+      if (!lastSnapshot) {
+        // First snapshot — store absolute
+        snapshots.push({ timestamp, likes, hearts, laughs, cries, comments });
+      } else {
+        // Subsequent snapshot — store as delta
+        const delta = { timestamp };
+        if (likes - lastSnapshot.likes) delta.dl = likes - lastSnapshot.likes;
+        if (hearts - lastSnapshot.hearts) delta.dh = hearts - lastSnapshot.hearts;
+        if (laughs - lastSnapshot.laughs) delta.dla = laughs - lastSnapshot.laughs;
+        if (cries - lastSnapshot.cries) delta.dc = cries - lastSnapshot.cries;
+        if (comments - lastSnapshot.comments) delta.dco = comments - lastSnapshot.comments;
+        if (Object.keys(delta).length > 1) {
+          snapshots.push(delta);
+        }
+      }
     }
 
-    // Apply same retention policy as totalSnapshots
-    snapshots = applyRetentionPolicy(snapshots);
+    // Apply retention: resolve to absolute first, retain, then re-encode as deltas
+    let resolvedSnapshots = resolveAllSnapshots(snapshots);
+    resolvedSnapshots = applyRetentionPolicy(resolvedSnapshots);
+    snapshots = encodeAsDeltas(resolvedSnapshots);
 
     return {
       id: String(img.id),
@@ -615,7 +717,7 @@ async function main() {
 
       // Show some sample data to verify it's real
       if (existingData.totalSnapshots.length > 0) {
-        const latest = existingData.totalSnapshots[existingData.totalSnapshots.length - 1];
+        const latest = resolveSnapshot(existingData.totalSnapshots, existingData.totalSnapshots.length - 1);
         console.log(`  Latest snapshot: ${latest.timestamp}`);
         console.log(`  Stats: ${latest.likes} likes, ${latest.hearts} hearts`);
       }
@@ -639,12 +741,37 @@ async function main() {
     console.log(`  Cries: ${totalSnapshot.cries}`);
     console.log(`  Comments: ${totalSnapshot.comments}`);
 
-    // Append new snapshot
-    existingData.totalSnapshots.push(totalSnapshot);
+    // Append new total snapshot (as delta if possible)
+    if (existingData.totalSnapshots.length > 0) {
+      const prevTotal = resolveSnapshot(existingData.totalSnapshots, existingData.totalSnapshots.length - 1);
+      const delta = { timestamp: totalSnapshot.timestamp, imageCount: totalSnapshot.imageCount };
+      if (totalSnapshot.likes - prevTotal.likes) delta.dl = totalSnapshot.likes - prevTotal.likes;
+      if (totalSnapshot.hearts - prevTotal.hearts) delta.dh = totalSnapshot.hearts - prevTotal.hearts;
+      if (totalSnapshot.laughs - prevTotal.laughs) delta.dla = totalSnapshot.laughs - prevTotal.laughs;
+      if (totalSnapshot.cries - prevTotal.cries) delta.dc = totalSnapshot.cries - prevTotal.cries;
+      if (totalSnapshot.comments - prevTotal.comments) delta.dco = totalSnapshot.comments - prevTotal.comments;
+      existingData.totalSnapshots.push(delta);
+    } else {
+      existingData.totalSnapshots.push(totalSnapshot);
+    }
 
-    // Apply retention policy to total snapshots
+    // Apply retention: resolve to absolute, retain, re-encode as deltas
     const snapshotsBefore = existingData.totalSnapshots.length;
-    existingData.totalSnapshots = applyRetentionPolicy(existingData.totalSnapshots);
+    let resolvedTotal = resolveAllSnapshots(existingData.totalSnapshots);
+    // Preserve imageCount through resolve/encode cycle
+    for (let i = 0; i < resolvedTotal.length; i++) {
+      if (existingData.totalSnapshots[i]?.imageCount != null) {
+        resolvedTotal[i].imageCount = existingData.totalSnapshots[i].imageCount;
+      }
+    }
+    resolvedTotal = applyRetentionPolicy(resolvedTotal);
+    existingData.totalSnapshots = encodeAsDeltas(resolvedTotal);
+    // Re-attach imageCount to encoded snapshots
+    for (let i = 0; i < existingData.totalSnapshots.length; i++) {
+      if (resolvedTotal[i]?.imageCount != null) {
+        existingData.totalSnapshots[i].imageCount = resolvedTotal[i].imageCount;
+      }
+    }
     const snapshotsAfter = existingData.totalSnapshots.length;
 
     if (snapshotsBefore !== snapshotsAfter) {
