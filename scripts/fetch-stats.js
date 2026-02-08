@@ -232,7 +232,7 @@ async function refreshImageStats(images) {
 async function fetchAllUserImages(username) {
   const allImages = [];
   // Use period=AllTime to ensure we get all historical images
-  let nextPage = `${CIVITAI_API_BASE}/images?username=${encodeURIComponent(username)}&limit=${IMAGES_PER_PAGE}&sort=Newest&period=AllTime`;
+  let nextPage = `${CIVITAI_API_BASE}/images?username=${encodeURIComponent(username)}&limit=${IMAGES_PER_PAGE}&sort=Newest&period=AllTime&nsfw=true`;
   let pageCount = 0;
 
   console.log(`Fetching images for user: ${username}`);
