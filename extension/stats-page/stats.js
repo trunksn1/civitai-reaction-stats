@@ -297,6 +297,9 @@ function renderStats() {
   // Render chart
   renderChart();
 
+  // Render period summary
+  renderPeriodSummary();
+
   // Render images
   renderImages(document.getElementById('sortSelect').value);
 }
@@ -424,6 +427,7 @@ function renderChart() {
  */
 function updateChart() {
   renderChart();
+  renderPeriodSummary();
 }
 
 /**
@@ -917,6 +921,116 @@ function getCurrentStats(image) {
 function getTotalReactions(stats) {
   if (!stats) return 0;
   return (stats.likes || 0) + (stats.hearts || 0) + (stats.laughs || 0) + (stats.cries || 0);
+}
+
+/**
+ * Compute period summary: total gains by type and per-image gains for the current time range
+ */
+function computePeriodSummary(timeRange) {
+  if (!statsData || !statsData.images) return null;
+
+  const types = ['likes', 'hearts', 'laughs', 'cries', 'comments', 'buzz', 'collects'];
+  const totals = {};
+  types.forEach(t => totals[t] = 0);
+
+  const imageGains = [];
+
+  for (const image of statsData.images) {
+    if (!image.snapshots || image.snapshots.length === 0) continue;
+
+    const resolved = resolveSnapshots(image.snapshots);
+    const filtered = filterByTimeRange(resolved, timeRange);
+    if (filtered.length < 2) continue;
+
+    const first = filtered[0];
+    const last = filtered[filtered.length - 1];
+
+    const gains = {};
+    let totalGain = 0;
+    for (const t of types) {
+      const g = Math.max(0, (last[t] || 0) - (first[t] || 0));
+      gains[t] = g;
+      totals[t] += g;
+      if (t !== 'comments') totalGain += g;
+    }
+
+    if (totalGain > 0) {
+      imageGains.push({ image, gains, totalGain });
+    }
+  }
+
+  imageGains.sort((a, b) => b.totalGain - a.totalGain);
+
+  return { totals, images: imageGains };
+}
+
+/**
+ * Render the period summary ribbon below the overview chart
+ */
+function renderPeriodSummary() {
+  const container = document.getElementById('periodSummary');
+  if (!container) return;
+
+  const summary = computePeriodSummary(currentTimeRange);
+
+  if (!summary || summary.images.length === 0) {
+    container.innerHTML = '<div class="period-summary-empty">No data for this period</div>';
+    return;
+  }
+
+  const emojiMap = {
+    likes: '\u{1F44D}', hearts: '\u2764\uFE0F', laughs: '\u{1F604}',
+    cries: '\u{1F622}', comments: '\u{1F4AC}', buzz: '\u26A1', collects: '\u{1F516}'
+  };
+
+  // Gains row
+  const badgesHtml = Object.entries(summary.totals)
+    .filter(([, v]) => v > 0)
+    .map(([type, val]) =>
+      `<span class="period-badge ${type}">${emojiMap[type]} <strong>+${formatNumber(val)}</strong></span>`
+    ).join('');
+
+  // Top 5 images
+  const top5 = summary.images.slice(0, 5);
+  const rest = summary.images.slice(5);
+
+  const topImagesHtml = top5.map(item => {
+    const img = item.image;
+    const thumb = img.thumbnailUrl
+      ? `<img src="${escapeHtml(img.thumbnailUrl)}" alt="" loading="lazy">`
+      : '<div class="placeholder">?</div>';
+    const name = escapeHtml(img.name || `Image ${img.id}`);
+    return `
+      <a class="period-top-image" href="${escapeHtml(img.url)}" target="_blank" rel="noopener">
+        <div class="period-top-thumb">${thumb}</div>
+        <div class="period-top-info">
+          <span class="period-top-name" title="${name}">${name}</span>
+          <span class="period-top-gain">+${formatNumber(item.totalGain)} reactions</span>
+        </div>
+      </a>`;
+  }).join('');
+
+  // "+N more" tooltip
+  let moreHtml = '';
+  if (rest.length > 0) {
+    const tooltipItems = rest.map(item => {
+      const name = escapeHtml(item.image.name || `Image ${item.image.id}`);
+      return `<div class="period-more-item"><span>${name}</span><span>+${formatNumber(item.totalGain)}</span></div>`;
+    }).join('');
+
+    moreHtml = `
+      <div class="period-more-wrapper">
+        <span class="period-badge period-more-badge">+${rest.length} more</span>
+        <div class="period-more-tooltip">${tooltipItems}</div>
+      </div>`;
+  }
+
+  container.innerHTML = `
+    <div class="period-gains-row">${badgesHtml}</div>
+    <div class="period-top-images">
+      ${topImagesHtml}
+      ${moreHtml}
+    </div>`;
 }
 
 /**

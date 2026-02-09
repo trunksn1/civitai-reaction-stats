@@ -800,6 +800,172 @@ body {
   font-size: 12px;
 }
 
+/* Period Summary Ribbon */
+.period-summary {
+  margin-top: 16px;
+  border-top: 1px solid var(--border-color);
+  padding-top: 16px;
+}
+
+.period-summary:empty {
+  display: none;
+}
+
+.period-summary-empty {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 8px 0;
+}
+
+.period-gains-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.period-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background-color: var(--bg-tertiary);
+  border-radius: 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.period-badge strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.period-top-images {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  align-items: flex-start;
+}
+
+.period-top-image {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 180px;
+  max-width: 220px;
+  padding: 8px 10px;
+  background-color: var(--bg-tertiary);
+  border-radius: 6px;
+  text-decoration: none;
+  color: inherit;
+  transition: background-color 0.2s;
+  flex-shrink: 0;
+}
+
+.period-top-image:hover {
+  background-color: #363a40;
+}
+
+.period-top-thumb {
+  width: 40px;
+  height: 40px;
+  border-radius: 4px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.period-top-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.period-top-thumb .placeholder {
+  width: 100%;
+  height: 100%;
+  background-color: var(--bg-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 16px;
+}
+
+.period-top-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.period-top-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.period-top-gain {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.period-more-wrapper {
+  position: relative;
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.period-more-badge {
+  cursor: default;
+  font-weight: 500;
+}
+
+.period-more-tooltip {
+  display: none;
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  margin-bottom: 8px;
+  min-width: 240px;
+  max-height: 300px;
+  overflow-y: auto;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 10;
+}
+
+.period-more-wrapper:hover .period-more-tooltip {
+  display: block;
+}
+
+.period-more-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.period-more-item span:first-child {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.period-more-item span:last-child {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
 /* Responsive */
 @media (max-width: 768px) {
   .container {
@@ -823,5 +989,23 @@ body {
   .images-header {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .period-badge {
+    padding: 3px 8px;
+    font-size: 12px;
+  }
+
+  .period-top-image {
+    min-width: 160px;
+    padding: 6px 8px;
+  }
+
+  .period-top-name {
+    font-size: 11px;
+  }
+
+  .period-top-gain {
+    font-size: 10px;
   }
 }
