@@ -841,6 +841,20 @@ body {
   font-weight: 600;
 }
 
+.period-badge[data-sort] {
+  cursor: pointer;
+  transition: background-color 0.2s, box-shadow 0.2s;
+}
+
+.period-badge[data-sort]:hover {
+  background-color: #363a40;
+}
+
+.period-badge[data-sort].active {
+  box-shadow: 0 0 0 2px var(--accent-blue);
+  background-color: rgba(34, 139, 230, 0.15);
+}
+
 .period-top-images {
   display: flex;
   gap: 10px;

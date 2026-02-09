@@ -8,6 +8,7 @@ let statsData = null;
 let overviewChart = null;
 let currentTimeRange = '1d';
 let currentChartType = 'auto'; // 'auto', 'line', 'bar'
+let currentPeriodSort = 'total';
 const imageChartTypes = new Map(); // Map<imageId, 'auto'|'line'|'bar'>
 let visibleLines = {
   total: true,
@@ -930,7 +931,7 @@ function computePeriodSummary(timeRange) {
   if (!statsData || !statsData.images) return null;
 
   const types = ['likes', 'hearts', 'laughs', 'cries', 'comments', 'buzz', 'collects'];
-  const totals = {};
+  const totals = { total: 0 };
   types.forEach(t => totals[t] = 0);
 
   const imageGains = [];
@@ -940,9 +941,12 @@ function computePeriodSummary(timeRange) {
 
     const resolved = resolveSnapshots(image.snapshots);
     const filtered = filterByTimeRange(resolved, timeRange);
-    if (filtered.length < 2) continue;
+    if (filtered.length < (timeRange === 'all' ? 1 : 2)) continue;
 
-    const first = filtered[0];
+    // For "all" time, use zero baseline so we show absolute totals (matching summary cards)
+    const first = timeRange === 'all'
+      ? { likes: 0, hearts: 0, laughs: 0, cries: 0, comments: 0, buzz: 0, collects: 0 }
+      : filtered[0];
     const last = filtered[filtered.length - 1];
 
     const gains = {};
@@ -951,11 +955,12 @@ function computePeriodSummary(timeRange) {
       const g = Math.max(0, (last[t] || 0) - (first[t] || 0));
       gains[t] = g;
       totals[t] += g;
-      if (t !== 'comments') totalGain += g;
+      if (t !== 'comments' && t !== 'buzz' && t !== 'collects') totalGain += g;
     }
 
     if (totalGain > 0) {
       imageGains.push({ image, gains, totalGain });
+      totals.total += totalGain;
     }
   }
 
@@ -979,20 +984,37 @@ function renderPeriodSummary() {
   }
 
   const emojiMap = {
+    total: '\u{1F310}',
     likes: '\u{1F44D}', hearts: '\u2764\uFE0F', laughs: '\u{1F604}',
     cries: '\u{1F622}', comments: '\u{1F4AC}', buzz: '\u26A1', collects: '\u{1F516}'
   };
 
-  // Gains row
-  const badgesHtml = Object.entries(summary.totals)
-    .filter(([, v]) => v > 0)
-    .map(([type, val]) =>
-      `<span class="period-badge ${type}">${emojiMap[type]} <strong>+${formatNumber(val)}</strong></span>`
-    ).join('');
+  const sortType = currentPeriodSort;
+  const sortLabel = sortType === 'total' ? 'reactions' : sortType;
+
+  // Sort images by selected type
+  let sortedImages;
+  if (sortType === 'total') {
+    sortedImages = [...summary.images].sort((a, b) => b.totalGain - a.totalGain);
+  } else {
+    sortedImages = [...summary.images]
+      .filter(item => (item.gains[sortType] || 0) > 0)
+      .sort((a, b) => (b.gains[sortType] || 0) - (a.gains[sortType] || 0));
+  }
+
+  // Gains row — Total badge always shown first, others only if > 0
+  const badgeTypes = ['total', ...Object.keys(summary.totals).filter(t => t !== 'total')];
+  const badgesHtml = badgeTypes
+    .filter(type => type === 'total' || summary.totals[type] > 0)
+    .map(type => {
+      const val = summary.totals[type];
+      const active = type === sortType ? ' active' : '';
+      return `<span class="period-badge ${type}${active}" data-sort="${type}">${emojiMap[type]} <strong>+${formatNumber(val)}</strong></span>`;
+    }).join('');
 
   // Top 5 images
-  const top5 = summary.images.slice(0, 5);
-  const rest = summary.images.slice(5);
+  const top5 = sortedImages.slice(0, 5);
+  const rest = sortedImages.slice(5);
 
   const topImagesHtml = top5.map(item => {
     const img = item.image;
@@ -1000,12 +1022,13 @@ function renderPeriodSummary() {
       ? `<img src="${escapeHtml(img.thumbnailUrl)}" alt="" loading="lazy">`
       : '<div class="placeholder">?</div>';
     const name = escapeHtml(img.name || `Image ${img.id}`);
+    const gainValue = sortType === 'total' ? item.totalGain : (item.gains[sortType] || 0);
     return `
       <a class="period-top-image" href="${escapeHtml(img.url)}" target="_blank" rel="noopener">
         <div class="period-top-thumb">${thumb}</div>
         <div class="period-top-info">
           <span class="period-top-name" title="${name}">${name}</span>
-          <span class="period-top-gain">+${formatNumber(item.totalGain)} reactions</span>
+          <span class="period-top-gain">+${formatNumber(gainValue)} ${sortLabel}</span>
         </div>
       </a>`;
   }).join('');
@@ -1015,7 +1038,8 @@ function renderPeriodSummary() {
   if (rest.length > 0) {
     const tooltipItems = rest.map(item => {
       const name = escapeHtml(item.image.name || `Image ${item.image.id}`);
-      return `<div class="period-more-item"><span>${name}</span><span>+${formatNumber(item.totalGain)}</span></div>`;
+      const gainValue = sortType === 'total' ? item.totalGain : (item.gains[sortType] || 0);
+      return `<div class="period-more-item"><span>${name}</span><span>+${formatNumber(gainValue)} ${sortLabel}</span></div>`;
     }).join('');
 
     moreHtml = `
@@ -1031,6 +1055,14 @@ function renderPeriodSummary() {
       ${topImagesHtml}
       ${moreHtml}
     </div>`;
+
+  // Attach click handlers to sortable badges
+  container.querySelectorAll('.period-badge[data-sort]').forEach(badge => {
+    badge.addEventListener('click', () => {
+      currentPeriodSort = badge.dataset.sort;
+      renderPeriodSummary();
+    });
+  });
 }
 
 /**
