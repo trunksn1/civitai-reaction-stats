@@ -117,15 +117,26 @@
       <!-- Overview Chart -->
       <section class="card chart-section">
         <div class="chart-header">
-          <h2>Reactions Over Time</h2>
+          <h2 id="chartTitle">Reactions Gained</h2>
           <div class="chart-controls">
             <div class="time-selector">
-              <button class="time-btn" data-range="1d">1D</button>
+              <button class="time-btn active" data-range="1d">1D</button>
               <button class="time-btn" data-range="7d">7D</button>
-              <button class="time-btn active" data-range="30d">30D</button>
+              <button class="time-btn" data-range="30d">30D</button>
               <button class="time-btn" data-range="90d">90D</button>
               <button class="time-btn" data-range="1y">1Y</button>
               <button class="time-btn" data-range="all">All</button>
+            </div>
+            <div class="chart-type-toggle" id="chartTypeToggle">
+              <button class="chart-type-btn active" data-type="auto" title="Auto (bar for delta, line for cumulative)">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v4m0 12v4m-10-10h4m12 0h4"/></svg>
+              </button>
+              <button class="chart-type-btn" data-type="line" title="Line chart">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 17 9 11 13 15 21 7"/></svg>
+              </button>
+              <button class="chart-type-btn" data-type="bar" title="Bar chart">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="12" width="4" height="9"/><rect x="10" y="7" width="4" height="14"/><rect x="17" y="3" width="4" height="18"/></svg>
+              </button>
             </div>
             <div class="line-toggles" id="lineToggles">
               <label class="toggle-label">
@@ -234,6 +245,36 @@
               <option value="buzz">⚡ Buzz</option>
               <option value="collects">🔖 Collects</option>
             </select>
+          </div>
+          <div class="image-global-line-toggles" id="imageLineToggles">
+            <label class="toggle-label">
+              <input type="checkbox" data-line="total" checked>
+              <span class="toggle-dot total"></span>&#x1F310;
+            </label>
+            <label class="toggle-label">
+              <input type="checkbox" data-line="likes" checked>
+              <span class="toggle-dot likes"></span>&#x1F44D;
+            </label>
+            <label class="toggle-label">
+              <input type="checkbox" data-line="hearts" checked>
+              <span class="toggle-dot hearts"></span>&#x2764;&#xFE0F;
+            </label>
+            <label class="toggle-label">
+              <input type="checkbox" data-line="laughs" checked>
+              <span class="toggle-dot laughs"></span>&#x1F604;
+            </label>
+            <label class="toggle-label">
+              <input type="checkbox" data-line="cries" checked>
+              <span class="toggle-dot cries"></span>&#x1F622;
+            </label>
+            <label class="toggle-label">
+              <input type="checkbox" data-line="buzz" checked>
+              <span class="toggle-dot buzz"></span>&#x26A1;
+            </label>
+            <label class="toggle-label">
+              <input type="checkbox" data-line="collects" checked>
+              <span class="toggle-dot collects"></span>&#x1F516;
+            </label>
           </div>
         </div>
         <div class="images-grid" id="imagesGrid">

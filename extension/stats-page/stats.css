@@ -329,6 +329,63 @@ body {
   color: #fff;
 }
 
+/* Chart Type Toggle */
+.chart-type-toggle {
+  display: flex;
+  background-color: var(--bg-tertiary);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.chart-type-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.chart-type-btn:hover {
+  color: var(--text-secondary);
+}
+
+.chart-type-btn.active {
+  background-color: var(--accent-blue);
+  color: #fff;
+}
+
+.image-chart-type-toggle {
+  display: flex;
+  background-color: var(--bg-secondary);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.image-chart-type-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.image-chart-type-btn:hover {
+  color: var(--text-secondary);
+}
+
+.image-chart-type-btn.active {
+  background-color: var(--accent-blue);
+  color: #fff;
+}
+
 .line-toggles {
   display: flex;
   flex-wrap: wrap;
@@ -595,17 +652,18 @@ body {
   gap: 8px;
 }
 
-.image-line-toggles {
+.image-global-line-toggles {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  width: 100%;
 }
 
-.image-line-toggles .toggle-label {
-  font-size: 11px;
+.image-global-line-toggles .toggle-label {
+  font-size: 12px;
 }
 
-.image-line-toggles .toggle-dot {
+.image-global-line-toggles .toggle-dot {
   width: 10px;
   height: 10px;
 }

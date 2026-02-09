@@ -6,7 +6,9 @@
 // State
 let statsData = null;
 let overviewChart = null;
-let currentTimeRange = '30d';
+let currentTimeRange = '1d';
+let currentChartType = 'auto'; // 'auto', 'line', 'bar'
+const imageChartTypes = new Map(); // Map<imageId, 'auto'|'line'|'bar'>
 let visibleLines = {
   total: true,
   likes: true,
@@ -22,7 +24,7 @@ const IMAGES_PER_PAGE = 10;
 // Track per-image chart state
 const imageCharts = new Map(); // Map<imageId, Chart>
 const imageTimeRanges = new Map(); // Map<imageId, timeRange>
-const imageVisibleLines = new Map(); // Map<imageId, {total,likes,hearts,laughs,cries}>
+let imageLineVisibility = { total: true, likes: true, hearts: true, laughs: true, cries: true, buzz: true, collects: true };
 
 // Emoji labels for chart tooltips
 const LABEL_EMOJI = {
@@ -34,6 +36,49 @@ const LABEL_EMOJI = {
   'Buzz': '\u26A1',           // ⚡
   'Collects': '\u{1F516}'    // 🔖
 };
+
+/**
+ * Check if the given time range should use delta mode (reactions gained per period)
+ */
+function isDeltaMode(timeRange) {
+  return ['1d', '7d', '30d', '90d'].includes(timeRange);
+}
+
+/**
+ * Compute deltas from resolved (absolute) snapshots.
+ * Each point becomes the difference from the previous point.
+ * Negative deltas are clamped to 0 (API caching artifacts).
+ * The first point is dropped (no previous to diff against).
+ */
+function computeDeltas(snapshots) {
+  if (!snapshots || snapshots.length < 2) return [];
+  const result = [];
+  for (let i = 1; i < snapshots.length; i++) {
+    const prev = snapshots[i - 1];
+    const curr = snapshots[i];
+    result.push({
+      timestamp: curr.timestamp,
+      likes: Math.max(0, (curr.likes || 0) - (prev.likes || 0)),
+      hearts: Math.max(0, (curr.hearts || 0) - (prev.hearts || 0)),
+      laughs: Math.max(0, (curr.laughs || 0) - (prev.laughs || 0)),
+      cries: Math.max(0, (curr.cries || 0) - (prev.cries || 0)),
+      comments: Math.max(0, (curr.comments || 0) - (prev.comments || 0)),
+      buzz: Math.max(0, (curr.buzz || 0) - (prev.buzz || 0)),
+      collects: Math.max(0, (curr.collects || 0) - (prev.collects || 0)),
+      views: Math.max(0, (curr.views || 0) - (prev.views || 0))
+    });
+  }
+  return result;
+}
+
+/**
+ * Get effective chart type based on time range and user override.
+ * 'auto' = bar for delta mode, line for cumulative.
+ */
+function getEffectiveChartType(timeRange, override) {
+  if (override && override !== 'auto') return override;
+  return isDeltaMode(timeRange) ? 'bar' : 'line';
+}
 
 /**
  * Resolve delta-encoded snapshots back to absolute values.
@@ -103,6 +148,7 @@ const retryBtn = document.getElementById('retryBtn');
  */
 async function init() {
   await loadCustomColors();
+  await loadChartTypePreference();
   setupEventListeners();
   setupColorSettings();
   await loadData();
@@ -126,11 +172,37 @@ function setupEventListeners() {
     });
   });
 
+  // Chart type toggle
+  document.querySelectorAll('#chartTypeToggle .chart-type-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#chartTypeToggle .chart-type-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentChartType = btn.dataset.type;
+      saveChartTypePreference();
+      updateChart();
+    });
+  });
+
   // Line toggles
   document.querySelectorAll('#lineToggles input').forEach(checkbox => {
     checkbox.addEventListener('change', () => {
       visibleLines[checkbox.dataset.line] = checkbox.checked;
       updateChart();
+    });
+  });
+
+  // Global image line toggles
+  document.querySelectorAll('#imageLineToggles input').forEach(checkbox => {
+    checkbox.addEventListener('change', () => {
+      imageLineVisibility[checkbox.dataset.line] = checkbox.checked;
+      // Re-render all open image charts
+      imageCharts.forEach((chart, imageId) => {
+        const image = statsData?.images?.find(img => img.id === imageId);
+        if (image) {
+          const timeRange = imageTimeRanges.get(imageId) || 'all';
+          renderImageChart(image, timeRange);
+        }
+      });
     });
   });
 
@@ -262,9 +334,17 @@ function renderChart() {
   }
 
   const data = getChartData();
+  const chartType = getEffectiveChartType(currentTimeRange, currentChartType);
+  const deltaMode = isDeltaMode(currentTimeRange);
+
+  // Update chart title
+  const titleEl = document.getElementById('chartTitle');
+  if (titleEl) {
+    titleEl.textContent = deltaMode ? 'Reactions Gained' : 'Reactions Over Time';
+  }
 
   overviewChart = new Chart(ctx, {
-    type: 'line',
+    type: chartType,
     data: data,
     options: {
       responsive: true,
@@ -289,6 +369,9 @@ function renderChart() {
             label: function(context) {
               const emoji = LABEL_EMOJI[context.dataset.label] || context.dataset.label;
               const value = context.parsed.y.toLocaleString();
+              if (deltaMode) {
+                return `${emoji}: +${value}`;
+              }
               const idx = context.dataIndex;
               let delta = '';
               if (idx > 0) {
@@ -323,7 +406,13 @@ function renderChart() {
             color: '#909296',
             callback: value => formatNumber(value)
           },
-          beginAtZero: true
+          beginAtZero: true,
+          title: deltaMode ? {
+            display: true,
+            text: 'Gained per period',
+            color: '#909296',
+            font: { size: 12 }
+          } : { display: false }
         }
       }
     }
@@ -334,18 +423,16 @@ function renderChart() {
  * Update chart with current settings
  */
 function updateChart() {
-  if (!overviewChart) return;
-
-  const data = getChartData();
-  overviewChart.data = data;
-  overviewChart.update();
+  renderChart();
 }
 
 /**
  * Get chart data based on current time range and visible lines
  */
 function getChartData() {
-  const snapshots = filterByTimeRange(resolveSnapshots(statsData.totalSnapshots || []));
+  const resolved = filterByTimeRange(resolveSnapshots(statsData.totalSnapshots || []));
+  const deltaMode = isDeltaMode(currentTimeRange);
+  const snapshots = deltaMode ? computeDeltas(resolved) : resolved;
 
   const labels = snapshots.map(s => formatChartDate(new Date(s.timestamp), currentTimeRange));
 
@@ -488,7 +575,6 @@ function renderImages(sortBy = 'newest') {
   imageCharts.forEach(chart => chart.destroy());
   imageCharts.clear();
   imageTimeRanges.clear();
-  imageVisibleLines.clear();
 
   // Update count
   document.getElementById('imageCount').textContent = `${images.length} images`;
@@ -531,7 +617,7 @@ function setupImageChartListeners(images) {
         if (!imageCharts.has(imageId)) {
           const image = images.find(img => img.id === imageId);
           if (image) {
-            const timeRange = imageTimeRanges.get(imageId) || '7d';
+            const timeRange = imageTimeRanges.get(imageId) || 'all';
             renderImageChart(image, timeRange);
           }
         }
@@ -539,23 +625,21 @@ function setupImageChartListeners(images) {
     });
   });
 
-  // Per-image line toggles
-  document.querySelectorAll('.image-line-toggles input').forEach(checkbox => {
-    checkbox.addEventListener('change', () => {
-      const imageId = checkbox.dataset.imageId;
-      const line = checkbox.dataset.line;
+  // Per-image chart type toggle
+  document.querySelectorAll('.image-chart-type-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const imageId = btn.dataset.imageId;
+      const type = btn.dataset.type;
 
-      // Initialize visibility state if needed
-      if (!imageVisibleLines.has(imageId)) {
-        imageVisibleLines.set(imageId, { total: true, likes: true, hearts: true, laughs: true, cries: true, buzz: true, collects: true });
-      }
+      const parent = btn.closest('.image-chart-type-toggle');
+      parent.querySelectorAll('.image-chart-type-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
 
-      imageVisibleLines.get(imageId)[line] = checkbox.checked;
+      imageChartTypes.set(imageId, type);
 
-      // Re-render chart
       const image = images.find(img => img.id === imageId);
       if (image) {
-        const timeRange = imageTimeRanges.get(imageId) || '7d';
+        const timeRange = imageTimeRanges.get(imageId) || 'all';
         renderImageChart(image, timeRange);
       }
     });
@@ -598,7 +682,9 @@ function renderImageChart(image, timeRange) {
     imageCharts.get(image.id).destroy();
   }
 
-  const snapshots = filterByTimeRange(resolveSnapshots(image.snapshots || []), timeRange);
+  const resolved = filterByTimeRange(resolveSnapshots(image.snapshots || []), timeRange);
+  const deltaMode = isDeltaMode(timeRange);
+  const snapshots = deltaMode ? computeDeltas(resolved) : resolved;
 
   if (snapshots.length < 2) {
     // Not enough data points
@@ -617,8 +703,7 @@ function renderImageChart(image, timeRange) {
 
   const labels = snapshots.map(s => formatChartDate(new Date(s.timestamp), timeRange));
 
-  // Get per-image visibility (default all visible)
-  const vis = imageVisibleLines.get(image.id) || { total: true, likes: true, hearts: true, laughs: true, cries: true, buzz: true, collects: true };
+  const vis = imageLineVisibility;
 
   const datasets = [];
 
@@ -714,8 +799,10 @@ function renderImageChart(image, timeRange) {
     });
   }
 
+  const chartType = getEffectiveChartType(timeRange, imageChartTypes.get(image.id));
+
   const chart = new Chart(ctx, {
-    type: 'line',
+    type: chartType,
     data: {
       labels,
       datasets
@@ -743,6 +830,9 @@ function renderImageChart(image, timeRange) {
             label: function(context) {
               const emoji = LABEL_EMOJI[context.dataset.label] || context.dataset.label;
               const value = context.parsed.y.toLocaleString();
+              if (deltaMode) {
+                return `${emoji}: +${value}`;
+              }
               const idx = context.dataIndex;
               let delta = '';
               if (idx > 0) {
@@ -771,7 +861,13 @@ function renderImageChart(image, timeRange) {
             font: { size: 10 },
             callback: value => formatNumber(value)
           },
-          beginAtZero: true
+          beginAtZero: true,
+          title: deltaMode ? {
+            display: true,
+            text: 'Gained per period',
+            color: '#909296',
+            font: { size: 10 }
+          } : { display: false }
         }
       }
     }
@@ -888,21 +984,23 @@ function createImageCard(image) {
         </button>
         <div class="image-chart-container" id="chart-container-${escapeHtml(image.id)}">
           <div class="image-chart-controls">
-            <div class="image-line-toggles" data-image-id="${escapeHtml(image.id)}">
-              <label class="toggle-label"><input type="checkbox" data-line="total" data-image-id="${escapeHtml(image.id)}" checked><span class="toggle-dot total"></span>&#x1F310;</label>
-              <label class="toggle-label"><input type="checkbox" data-line="likes" data-image-id="${escapeHtml(image.id)}" checked><span class="toggle-dot likes"></span>&#x1F44D;</label>
-              <label class="toggle-label"><input type="checkbox" data-line="hearts" data-image-id="${escapeHtml(image.id)}" checked><span class="toggle-dot hearts"></span>&#x2764;&#xFE0F;</label>
-              <label class="toggle-label"><input type="checkbox" data-line="laughs" data-image-id="${escapeHtml(image.id)}" checked><span class="toggle-dot laughs"></span>&#x1F604;</label>
-              <label class="toggle-label"><input type="checkbox" data-line="cries" data-image-id="${escapeHtml(image.id)}" checked><span class="toggle-dot cries"></span>&#x1F622;</label>
-              <label class="toggle-label"><input type="checkbox" data-line="buzz" data-image-id="${escapeHtml(image.id)}" checked><span class="toggle-dot buzz"></span>&#x26A1;</label>
-              <label class="toggle-label"><input type="checkbox" data-line="collects" data-image-id="${escapeHtml(image.id)}" checked><span class="toggle-dot collects"></span>&#x1F516;</label>
-            </div>
             <div class="image-time-selector">
               <button class="image-time-btn" data-range="1d" data-image-id="${escapeHtml(image.id)}">1D</button>
-              <button class="image-time-btn active" data-range="7d" data-image-id="${escapeHtml(image.id)}">7D</button>
+              <button class="image-time-btn" data-range="7d" data-image-id="${escapeHtml(image.id)}">7D</button>
               <button class="image-time-btn" data-range="30d" data-image-id="${escapeHtml(image.id)}">30D</button>
               <button class="image-time-btn" data-range="1y" data-image-id="${escapeHtml(image.id)}">1Y</button>
-              <button class="image-time-btn" data-range="all" data-image-id="${escapeHtml(image.id)}">All</button>
+              <button class="image-time-btn active" data-range="all" data-image-id="${escapeHtml(image.id)}">All</button>
+            </div>
+            <div class="image-chart-type-toggle" data-image-id="${escapeHtml(image.id)}">
+              <button class="image-chart-type-btn active" data-type="auto" data-image-id="${escapeHtml(image.id)}" title="Auto">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v4m0 12v4m-10-10h4m12 0h4"/></svg>
+              </button>
+              <button class="image-chart-type-btn" data-type="line" data-image-id="${escapeHtml(image.id)}" title="Line">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 17 9 11 13 15 21 7"/></svg>
+              </button>
+              <button class="image-chart-type-btn" data-type="bar" data-image-id="${escapeHtml(image.id)}" title="Bar">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="12" width="4" height="9"/><rect x="10" y="7" width="4" height="14"/><rect x="17" y="3" width="4" height="18"/></svg>
+              </button>
             </div>
           </div>
           <div class="image-chart-wrapper">
@@ -1040,7 +1138,7 @@ function setupColorSettings() {
       imageCharts.forEach((chart, imageId) => {
         const image = statsData?.images?.find(img => img.id === imageId);
         if (image) {
-          const timeRange = imageTimeRanges.get(imageId) || '7d';
+          const timeRange = imageTimeRanges.get(imageId) || 'all';
           renderImageChart(image, timeRange);
         }
       });
@@ -1064,7 +1162,7 @@ function setupColorSettings() {
     imageCharts.forEach((chart, imageId) => {
       const image = statsData?.images?.find(img => img.id === imageId);
       if (image) {
-        const timeRange = imageTimeRanges.get(imageId) || '7d';
+        const timeRange = imageTimeRanges.get(imageId) || 'all';
         renderImageChart(image, timeRange);
       }
     });
@@ -1090,6 +1188,34 @@ function saveCustomColors() {
     action: 'saveSettings',
     settings: { chartColors: Object.keys(custom).length > 0 ? custom : null }
   });
+}
+
+/**
+ * Save chart type preference to storage
+ */
+function saveChartTypePreference() {
+  chrome.runtime.sendMessage({
+    action: 'saveSettings',
+    settings: { chartType: currentChartType !== 'auto' ? currentChartType : null }
+  });
+}
+
+/**
+ * Load chart type preference from storage
+ */
+async function loadChartTypePreference() {
+  try {
+    const response = await chrome.runtime.sendMessage({ action: 'getSettings' });
+    if (response.success && response.settings.chartType) {
+      currentChartType = response.settings.chartType;
+      // Update toggle button UI
+      document.querySelectorAll('#chartTypeToggle .chart-type-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.type === currentChartType);
+      });
+    }
+  } catch (e) {
+    // Silently use default
+  }
 }
 
 // Initialize on load
