@@ -769,6 +769,40 @@ function processImages(apiImages, existingImages = []) {
     };
   });
 
+  // Include last-known stats for images not returned by API this run
+  // This prevents false dips in the total when the API drops some images
+  const apiImageIds = new Set(apiImages.map(img => String(img.id)));
+  let missingImageCount = 0;
+
+  for (const existing of existingImages) {
+    if (!apiImageIds.has(existing.id) && existing.snapshots?.length > 0) {
+      const last = resolveSnapshot(existing.snapshots, existing.snapshots.length - 1);
+      totalLikes += last.likes || 0;
+      totalHearts += last.hearts || 0;
+      totalLaughs += last.laughs || 0;
+      totalCries += last.cries || 0;
+      totalComments += last.comments || 0;
+      totalBuzz += last.buzz || 0;
+      totalCollects += last.collects || 0;
+      totalViews += last.views || 0;
+
+      // Preserve the image in the output so its history isn't lost
+      images.push({
+        id: existing.id,
+        name: existing.name,
+        url: existing.url,
+        thumbnailUrl: existing.thumbnailUrl,
+        createdAt: existing.createdAt,
+        snapshots: existing.snapshots // keep existing snapshots as-is
+      });
+      missingImageCount++;
+    }
+  }
+
+  if (missingImageCount > 0) {
+    console.log(`\n⚠️  ${missingImageCount} images from history not found in API response (stats carried forward)`);
+  }
+
   const newImages = images.filter(img => img.snapshots.length === 1).length;
   const multiSnapshot = images.filter(img => img.snapshots.length > 1).length;
   console.log(`\nImage history: ${newImages} new, ${multiSnapshot} with prior history`);
@@ -853,6 +887,19 @@ async function main() {
     // Append new total snapshot (as delta if possible)
     if (existingData.totalSnapshots.length > 0) {
       const prevTotal = resolveSnapshot(existingData.totalSnapshots, existingData.totalSnapshots.length - 1);
+
+      // Clamp: total should never decrease (same rationale as per-image clamping)
+      // If the API missed images, the carried-forward stats (Change 2) should prevent this,
+      // but this is a safety net in case anything slips through.
+      totalSnapshot.likes = Math.max(totalSnapshot.likes, prevTotal.likes);
+      totalSnapshot.hearts = Math.max(totalSnapshot.hearts, prevTotal.hearts);
+      totalSnapshot.laughs = Math.max(totalSnapshot.laughs, prevTotal.laughs);
+      totalSnapshot.cries = Math.max(totalSnapshot.cries, prevTotal.cries);
+      totalSnapshot.comments = Math.max(totalSnapshot.comments, prevTotal.comments);
+      totalSnapshot.buzz = Math.max(totalSnapshot.buzz, prevTotal.buzz || 0);
+      totalSnapshot.collects = Math.max(totalSnapshot.collects, prevTotal.collects || 0);
+      totalSnapshot.views = Math.max(totalSnapshot.views, prevTotal.views || 0);
+
       const delta = { timestamp: totalSnapshot.timestamp, imageCount: totalSnapshot.imageCount };
       if (totalSnapshot.likes - prevTotal.likes) delta.dl = totalSnapshot.likes - prevTotal.likes;
       if (totalSnapshot.hearts - prevTotal.hearts) delta.dh = totalSnapshot.hearts - prevTotal.hearts;
