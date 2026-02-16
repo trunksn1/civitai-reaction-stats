@@ -3,6 +3,7 @@ node_modules/
 collect/
 latest_log/
 old/
+docs/
 *.txt
 stats.json
 PLAN.md
