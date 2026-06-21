@@ -6,6 +6,8 @@
 // State
 let statsData = null;
 let overviewChart = null;
+let overviewActivityChart = null;
+let currentTab = 'overview';
 let currentTimeRange = '1d';
 let currentChartType = 'auto'; // 'auto', 'line', 'bar'
 let currentPeriodSort = 'total';
@@ -163,6 +165,11 @@ function setupEventListeners() {
   refreshBtn.addEventListener('click', () => loadData());
   retryBtn.addEventListener('click', () => loadData());
 
+  // Tab navigation
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+  });
+
   // Time range selector
   document.querySelectorAll('.time-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -295,14 +302,44 @@ function renderStats() {
   // Render summary cards
   renderSummaryCards();
 
-  // Render chart
-  renderChart();
-
-  // Render period summary
-  renderPeriodSummary();
+  // Render Overview tab widgets
+  renderKpiDeltas();
+  renderReactionMix();
+  renderActivityChart();
+  renderTopMovers();
 
   // Render images
   renderImages(document.getElementById('sortSelect').value);
+
+  // The Trends chart is rendered lazily when its tab is activated (a canvas
+  // sized while hidden renders at 0 height). Render now only if already active.
+  if (currentTab === 'trends') {
+    renderChart();
+    renderPeriodSummary();
+  }
+}
+
+/**
+ * Switch the active tab. The Trends chart is (re)rendered on activation so its
+ * canvas is sized while visible; the Overview activity chart is resized in case
+ * it was created while another tab was showing.
+ */
+function switchTab(tab) {
+  currentTab = tab;
+
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tab === tab);
+  });
+  document.querySelectorAll('.tab-panel').forEach(panel => {
+    panel.hidden = panel.id !== `tab-${tab}`;
+  });
+
+  if (tab === 'trends' && statsData) {
+    renderChart();
+    renderPeriodSummary();
+  } else if (tab === 'overview' && overviewActivityChart) {
+    overviewActivityChart.resize();
+  }
 }
 
 /**
@@ -324,6 +361,218 @@ function renderSummaryCards() {
   document.getElementById('totalComments').textContent = (latest.comments || 0).toLocaleString();
   document.getElementById('totalBuzz').textContent = (latest.buzz || 0).toLocaleString();
   document.getElementById('totalCollects').textContent = (latest.collects || 0).toLocaleString();
+}
+
+/**
+ * Show +today / +7d gains under each summary card. Reuses computePeriodSummary,
+ * which already sums per-image gains by reaction type for a time range.
+ */
+function renderKpiDeltas() {
+  const today = computePeriodSummary('1d');
+  const week = computePeriodSummary('7d');
+  const types = ['total', 'likes', 'hearts', 'laughs', 'cries', 'comments', 'buzz', 'collects'];
+
+  for (const type of types) {
+    const card = document.querySelector(`.summary-card[data-type="${type}"]`);
+    const content = card?.querySelector('.card-content');
+    if (!content) continue;
+
+    let deltaEl = content.querySelector('.card-delta');
+    if (!deltaEl) {
+      deltaEl = document.createElement('span');
+      deltaEl.className = 'card-delta';
+      content.appendChild(deltaEl);
+    }
+
+    const d1 = today?.totals?.[type] || 0;
+    const d7 = week?.totals?.[type] || 0;
+    const fmt = n => (n > 0 ? `+${formatNumber(n)}` : '0');
+    deltaEl.innerHTML =
+      `<span class="${d1 > 0 ? 'delta-up' : 'delta-muted'}">${fmt(d1)} today</span>` +
+      `<span class="delta-sep">·</span>` +
+      `<span class="${d7 > 0 ? 'delta-up' : 'delta-muted'}">${fmt(d7)} 7d</span>`;
+  }
+}
+
+/**
+ * Reaction mix: today's gained reactions by type as proportion bars. Falls back
+ * to all-time cumulative totals when there is no same-day data yet.
+ */
+function renderReactionMix() {
+  const container = document.getElementById('reactionMix');
+  if (!container) return;
+
+  const types = [
+    { key: 'likes', emoji: '\u{1F44D}' },
+    { key: 'hearts', emoji: '❤️' },
+    { key: 'laughs', emoji: '\u{1F604}' },
+    { key: 'cries', emoji: '\u{1F622}' }
+  ];
+
+  const today = computePeriodSummary('1d')?.totals || {};
+  let values = types.map(t => today[t.key] || 0);
+  let scope = 'today';
+
+  if (values.reduce((a, b) => a + b, 0) === 0) {
+    const resolved = resolveSnapshots(statsData.totalSnapshots || []);
+    const latest = resolved[resolved.length - 1] || {};
+    values = types.map(t => latest[t.key] || 0);
+    scope = 'all time';
+  }
+
+  const total = values.reduce((a, b) => a + b, 0);
+
+  const sub = container.closest('.overview-widget')?.querySelector('.widget-sub');
+  if (sub) sub.textContent = scope;
+
+  if (total === 0) {
+    container.innerHTML = '<div class="widget-empty">No reactions yet</div>';
+    return;
+  }
+
+  container.innerHTML = types.map((t, i) => {
+    const value = values[i];
+    const pct = Math.round((value / total) * 100);
+    return `
+      <div class="mix-row">
+        <span class="mix-label">${t.emoji}</span>
+        <div class="mix-track">
+          <div class="mix-fill" style="width: ${pct}%; background-color: var(--color-${t.key});"></div>
+        </div>
+        <span class="mix-value">${formatNumber(value)}</span>
+      </div>`;
+  }).join('');
+}
+
+/**
+ * Daily activity: total reactions gained per calendar day over the last N days.
+ * Buckets the already-clamped per-snapshot deltas from computeDeltas by day.
+ */
+function dailyActivity(days) {
+  const resolved = resolveSnapshots(statsData.totalSnapshots || []);
+  const deltas = computeDeltas(resolved);
+
+  const dayKey = d => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const buckets = [];
+  const index = new Map();
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(today.getDate() - i);
+    index.set(dayKey(d), buckets.length);
+    buckets.push({ date: d, total: 0 });
+  }
+
+  for (const pt of deltas) {
+    const d = new Date(pt.timestamp);
+    const key = dayKey(new Date(d.getFullYear(), d.getMonth(), d.getDate()));
+    if (index.has(key)) {
+      const b = buckets[index.get(key)];
+      b.total += (pt.likes || 0) + (pt.hearts || 0) + (pt.laughs || 0) + (pt.cries || 0);
+    }
+  }
+
+  return buckets;
+}
+
+/**
+ * Render the Overview daily-activity bar chart.
+ */
+function renderActivityChart() {
+  const canvas = document.getElementById('overviewActivityChart');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+
+  if (overviewActivityChart) {
+    overviewActivityChart.destroy();
+  }
+
+  const buckets = dailyActivity(14);
+  const pad = n => String(n).padStart(2, '0');
+  const labels = buckets.map(b => `${pad(b.date.getMonth() + 1)}-${pad(b.date.getDate())}`);
+
+  overviewActivityChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Reactions',
+        data: buckets.map(b => b.total),
+        backgroundColor: CHART_COLORS.total,
+        borderRadius: 3,
+        maxBarThickness: 28
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#25262b',
+          titleColor: '#fff',
+          bodyColor: '#c1c2c5',
+          borderColor: '#373a40',
+          borderWidth: 1,
+          padding: 10,
+          callbacks: {
+            label: ctx => `\u{1F310} +${ctx.parsed.y.toLocaleString()}`
+          }
+        }
+      },
+      scales: {
+        x: {
+          grid: { display: false },
+          ticks: { color: '#909296', maxRotation: 0, autoSkip: true, maxTicksLimit: 7 }
+        },
+        y: {
+          beginAtZero: true,
+          grid: { color: 'rgba(55, 58, 64, 0.5)' },
+          ticks: { color: '#909296', callback: value => formatNumber(value) }
+        }
+      }
+    }
+  });
+}
+
+/**
+ * Render the Top movers list: images with the most reactions gained in 7 days.
+ */
+function renderTopMovers() {
+  const container = document.getElementById('topMovers');
+  if (!container) return;
+
+  const summary = computePeriodSummary('7d');
+  const movers = (summary?.images || []).slice(0, 5);
+
+  if (movers.length === 0) {
+    container.innerHTML = '<div class="widget-empty">No movement in the last 7 days</div>';
+    return;
+  }
+
+  const maxGain = movers[0].totalGain || 1;
+
+  container.innerHTML = movers.map(({ image, totalGain }) => {
+    const pct = Math.round((totalGain / maxGain) * 100);
+    const name = escapeHtml(image.name || 'Untitled');
+    const thumb = image.thumbnailUrl
+      ? `<img src="${escapeHtml(image.thumbnailUrl)}" alt="" loading="lazy">`
+      : '<div class="placeholder">\u{1F5BC}️</div>';
+    const href = image.url ? escapeHtml(image.url) : '#';
+    return `
+      <a class="mover-row" href="${href}" target="_blank" rel="noopener">
+        <div class="mover-thumb">${thumb}</div>
+        <div class="mover-info">
+          <div class="mover-name">${name}</div>
+          <div class="mover-bar-track">
+            <div class="mover-bar-fill" style="width: ${pct}%;"></div>
+          </div>
+        </div>
+        <div class="mover-gain">+${formatNumber(totalGain)}</div>
+      </a>`;
+  }).join('');
 }
 
 /**
