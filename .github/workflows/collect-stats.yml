@@ -41,4 +41,5 @@ jobs:
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
           CIVITAI_USERNAME: ${{ secrets.CIVITAI_USERNAME }}
           CIVITAI_API_KEY: ${{ secrets.CIVITAI_API_KEY }}
+          CIVITAI_RED_API_KEY: ${{ secrets.CIVITAI_RED_API_KEY }}
           REFRESH_TIER: ${{ github.event.inputs.refresh-tier || 'auto' }}

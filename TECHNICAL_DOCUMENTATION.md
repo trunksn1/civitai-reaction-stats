@@ -537,7 +537,22 @@ interface ImageSnapshot {
 
 ## API Integration
 
+### Dual-host discovery (civitai.com + civitai.red)
+
+R-and-harder content was moved to `civitai.red`. `fetchAllUserImages()` runs the
+per-NSFW-level discovery against **both** hosts via `fetchUserImagesFromHost(username, host)`,
+tags every image with `host` (`'com'` | `'red'`), then merges/dedupes by id
+(`mergeDiscoveredImage` keeps per-field `Math.max` stats). `.red` discovery is
+best-effort: wrapped in try/catch so a `.red` failure degrades to `.com`-only
+rather than aborting. Auth is host-aware in `fetchWithRetry` (uses
+`CIVITAI_RED_API_KEY` for `.red`, falling back to `CIVITAI_API_KEY`); per-image
+refresh (`fetchImageStats(id, host)`) and image URLs are derived from the host.
+Images not returned by either host are carried forward and marked `stale: true`.
+
 ### Civitai API Endpoints
+
+Endpoints below exist on both `civitai.com` and `civitai.red` (same backend);
+the host is chosen per image.
 
 #### 1. Bulk Image Fetch
 ```

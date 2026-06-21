@@ -5,6 +5,10 @@ const GIST_ID = process.env.GIST_ID;
 const GIST_TOKEN = process.env.GIST_TOKEN;
 const CIVITAI_USERNAME = process.env.CIVITAI_USERNAME;
 const CIVITAI_API_KEY = process.env.CIVITAI_API_KEY; // Optional - may help get accurate stats
+// R-and-harder content was moved to a separate domain (civitai.red). The .red
+// API uses the same backend/shape; fall back to the .com key if none is set.
+const CIVITAI_RED_API_KEY = process.env.CIVITAI_RED_API_KEY || process.env.CIVITAI_API_KEY;
+const CIVITAI_RED_ENABLED = (process.env.CIVITAI_RED_ENABLED || 'true').toLowerCase() !== 'false';
 const REFRESH_TIER_OVERRIDE = process.env.REFRESH_TIER; // Optional: 'auto', 'daily', 'monthly', 'quarterly'
 
 // Validate required environment variables
@@ -22,11 +26,26 @@ if (CIVITAI_API_KEY) {
   console.log('No CIVITAI_API_KEY set - using unauthenticated requests');
 }
 
+if (CIVITAI_RED_ENABLED) {
+  console.log(`civitai.red capture: enabled${process.env.CIVITAI_RED_API_KEY ? ' (dedicated key)' : ' (using .com key)'}`);
+} else {
+  console.log('civitai.red capture: disabled');
+}
+
 const octokit = new Octokit({ auth: GIST_TOKEN });
 
 // Constants
 const CIVITAI_API_BASE = 'https://civitai.com/api/v1';
+const CIVITAI_RED_API_BASE = 'https://civitai.red/api/v1';
 const IMAGES_PER_PAGE = 200;
+
+// Map an image's host ('com' | 'red') to its API base and site origin.
+function apiBaseForHost(host) {
+  return host === 'red' ? CIVITAI_RED_API_BASE : CIVITAI_API_BASE;
+}
+function siteOriginForHost(host) {
+  return host === 'red' ? 'https://civitai.red' : 'https://civitai.com';
+}
 const MAX_RETRIES = 3;
 const INITIAL_BACKOFF_MS = 1000;
 const STATS_FETCH_DELAY_MS = 300; // Delay between individual image stats fetches
@@ -43,8 +62,11 @@ async function fetchWithRetry(url, retries = MAX_RETRIES, backoff = INITIAL_BACK
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const headers = {};
-      if (CIVITAI_API_KEY) {
-        headers['Authorization'] = `Bearer ${CIVITAI_API_KEY}`;
+      // Pick the auth key by host so .red requests use the .red key (which may
+      // differ from the .com key, though it falls back to it).
+      const key = url.includes('civitai.red') ? CIVITAI_RED_API_KEY : CIVITAI_API_KEY;
+      if (key) {
+        headers['Authorization'] = `Bearer ${key}`;
       }
       const response = await fetch(url, { headers });
 
@@ -83,9 +105,9 @@ function sleep(ms) {
  * The tRPC endpoint returns additional fields (buzz, collects, views)
  * that the public REST API does not expose.
  */
-async function fetchImageStats(imageId) {
+async function fetchImageStats(imageId, host = 'com') {
   const input = { json: { id: Number(imageId) } };
-  const url = `https://civitai.com/api/trpc/image.get?input=${encodeURIComponent(JSON.stringify(input))}`;
+  const url = `${siteOriginForHost(host)}/api/trpc/image.get?input=${encodeURIComponent(JSON.stringify(input))}`;
   try {
     const data = await fetchWithRetry(url);
     const item = data?.result?.data?.json;
@@ -189,7 +211,7 @@ async function refreshImageStats(images) {
     const batch = refreshList.slice(i, i + STATS_BATCH_SIZE);
 
     const results = await Promise.all(
-      batch.map(img => fetchImageStats(img.id))
+      batch.map(img => fetchImageStats(img.id, img.host || 'com'))
     );
 
     for (let j = 0; j < batch.length; j++) {
@@ -277,12 +299,33 @@ async function fetchAllPages(startUrl, label) {
  * Fetches each NSFW level separately because the API doesn't reliably return all in one call.
  * nsfw=true only returns Mature+X, omitting Soft (PG-13). See: github.com/civitai/civitai/issues/1795
  */
-async function fetchAllUserImages(username) {
-  const baseUrl = `${CIVITAI_API_BASE}/images?username=${encodeURIComponent(username)}&limit=${IMAGES_PER_PAGE}&sort=Newest&period=AllTime`;
+function totalReactionsOf(img) {
+  return (img.stats?.likeCount || 0) + (img.stats?.heartCount || 0) +
+         (img.stats?.laughCount || 0) + (img.stats?.cryCount || 0);
+}
 
-  // Fetch each NSFW level separately because the API doesn't reliably return all in one call.
-  // nsfw=true only returns Mature+X, omitting Soft (PG-13). See: github.com/civitai/civitai/issues/1795
-  console.log(`Fetching images for user: ${username}`);
+/**
+ * Merge two discovery records for the same image id (rare post-split, since an
+ * image lives on one host). Keep the per-field maximum and prefer the host whose
+ * response reported the higher total.
+ */
+function mergeDiscoveredImage(a, b) {
+  const base = totalReactionsOf(b) > totalReactionsOf(a) ? b : a;
+  const fields = ['likeCount', 'heartCount', 'laughCount', 'cryCount',
+    'commentCount', 'buzzCount', 'collectCount', 'viewCount'];
+  const stats = {};
+  for (const f of fields) {
+    stats[f] = Math.max(a.stats?.[f] || 0, b.stats?.[f] || 0);
+  }
+  return { ...base, stats };
+}
+
+/**
+ * Fetch all of a user's images from a single host, paginating each NSFW level.
+ * Tags each returned image with its host ('com' | 'red').
+ */
+async function fetchUserImagesFromHost(username, host) {
+  const baseUrl = `${apiBaseForHost(host)}/images?username=${encodeURIComponent(username)}&limit=${IMAGES_PER_PAGE}&sort=Newest&period=AllTime`;
 
   const nsfwLevels = [
     { param: '',             label: 'SFW (None)' },
@@ -293,21 +336,52 @@ async function fetchAllUserImages(username) {
 
   const results = [];
   for (const { param, label } of nsfwLevels) {
-    const images = await fetchAllPages(`${baseUrl}${param}`, label);
+    const images = await fetchAllPages(`${baseUrl}${param}`, `${host}:${label}`);
     results.push({ label, count: images.length, images });
   }
 
-  // Merge and deduplicate by image ID
+  // Deduplicate within this host and tag the host on each image.
   const imageMap = new Map();
   for (const { images } of results) {
     for (const img of images) {
+      img.host = host;
       imageMap.set(img.id, img);
     }
   }
-  const allImages = Array.from(imageMap.values());
 
   const breakdown = results.map(r => `${r.count} ${r.label}`).join(' + ');
-  console.log(`\nCombined: ${breakdown} = ${allImages.length} unique images`);
+  console.log(`[${host}] ${breakdown} = ${imageMap.size} unique images`);
+  return Array.from(imageMap.values());
+}
+
+async function fetchAllUserImages(username) {
+  console.log(`Fetching images for user: ${username}`);
+
+  // .com discovery is required.
+  const comImages = await fetchUserImagesFromHost(username, 'com');
+
+  // .red discovery (R-and-harder content moved here). Best-effort: a failure
+  // must not abort the whole run, otherwise a .red outage would lose .com data.
+  let redImages = [];
+  if (CIVITAI_RED_ENABLED) {
+    try {
+      redImages = await fetchUserImagesFromHost(username, 'red');
+    } catch (err) {
+      console.log(`\n⚠️  civitai.red discovery failed (continuing with .com only): ${err.message}`);
+    }
+  } else {
+    console.log('civitai.red discovery disabled (CIVITAI_RED_ENABLED=false)');
+  }
+
+  // Merge and deduplicate by image ID across both hosts.
+  const imageMap = new Map();
+  for (const img of [...comImages, ...redImages]) {
+    const existing = imageMap.get(img.id);
+    imageMap.set(img.id, existing ? mergeDiscoveredImage(existing, img) : img);
+  }
+  const allImages = Array.from(imageMap.values());
+
+  console.log(`\nCombined hosts: ${comImages.length} com + ${redImages.length} red = ${allImages.length} unique images`);
 
   // Filter out unpublished/scheduled images (future dates)
   const now = new Date();
@@ -759,12 +833,16 @@ function processImages(apiImages, existingImages = []) {
     resolvedSnapshots = applyRetentionPolicy(resolvedSnapshots);
     snapshots = encodeAsDeltas(resolvedSnapshots);
 
+    const host = img.host || 'com';
     return {
       id: String(img.id),
       name: img.meta?.prompt?.substring(0, 100) || `Image ${img.id}`,
-      url: `https://civitai.com/images/${img.id}`,
+      url: `${siteOriginForHost(host)}/images/${img.id}`,
       thumbnailUrl: img.url,
       createdAt: img.createdAt,
+      host,
+      lastSeenAt: timestamp,
+      stale: false,
       snapshots
     };
   });
@@ -786,13 +864,19 @@ function processImages(apiImages, existingImages = []) {
       totalCollects += last.collects || 0;
       totalViews += last.views || 0;
 
-      // Preserve the image in the output so its history isn't lost
+      // Preserve the image in the output so its history isn't lost. Mark it
+      // stale: no API (either host) returned it this run, so it's frozen at its
+      // last-known value — likely migrated to civitai.red or removed.
+      const host = existing.host || 'com';
       images.push({
         id: existing.id,
         name: existing.name,
-        url: existing.url,
+        url: existing.url || `${siteOriginForHost(host)}/images/${existing.id}`,
         thumbnailUrl: existing.thumbnailUrl,
         createdAt: existing.createdAt,
+        host,
+        lastSeenAt: existing.lastSeenAt || null,
+        stale: true,
         snapshots: existing.snapshots // keep existing snapshots as-is
       });
       missingImageCount++;
@@ -806,6 +890,10 @@ function processImages(apiImages, existingImages = []) {
   const newImages = images.filter(img => img.snapshots.length === 1).length;
   const multiSnapshot = images.filter(img => img.snapshots.length > 1).length;
   console.log(`\nImage history: ${newImages} new, ${multiSnapshot} with prior history`);
+
+  const redCount = images.filter(img => img.host === 'red').length;
+  const staleCount = images.filter(img => img.stale).length;
+  console.log(`Host split: ${images.length - redCount} com, ${redCount} red | ${staleCount} stale (frozen, not seen this run)`);
 
   const totalSnapshot = {
     timestamp,

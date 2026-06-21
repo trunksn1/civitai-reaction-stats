@@ -65,8 +65,11 @@ Chrome Extension ◄── reads ◄── gist.githubusercontent.com
 | `GIST_TOKEN` | Your Personal Access Token from step 2 | ✅ Yes |
 | `CIVITAI_USERNAME` | Your Civitai username | ✅ Yes |
 | `CIVITAI_API_KEY` | Your Civitai API key (helps get accurate stats) | ⚠️ Optional |
+| `CIVITAI_RED_API_KEY` | API key for civitai.red (R+ content). Falls back to `CIVITAI_API_KEY` if unset | ⚠️ Optional |
 
 **Note:** The `CIVITAI_API_KEY` is optional but recommended. Without it, the script uses unauthenticated requests which may have lower rate limits.
+
+**civitai.red (R-rated and harder content):** Civitai moved R+ content to a separate domain, `civitai.red`. The collector now queries **both** `civitai.com` and `civitai.red` so reactions on your R+ images keep being tracked. This is on by default; set the `CIVITAI_RED_ENABLED` repo variable to `false` to disable it. If your `.com` API key doesn't authorize `.red`, add a dedicated `CIVITAI_RED_API_KEY` secret. See [civitai.red split](#civitairred-split-r-content) below for what happens to images tracked before the split.
 
 ### 4. Enable GitHub Actions
 
@@ -240,6 +243,19 @@ To prevent your Gist from growing infinitely large, snapshots are automatically 
 - Older snapshots are automatically aggregated (keeps the last value in each time bucket)
 - This prevents exponential growth while maintaining long-term trend visibility
 - Applied to both `totalSnapshots` and individual `images[].snapshots`
+
+## civitai.red split (R+ content)
+
+Civitai moved R-rated-and-harder content to a separate domain, `civitai.red`. The collector queries both domains and tags each image with its `host` (`com` or `red`).
+
+**Your historical counts were never at risk.** Even before this change, images that dropped out of the API were *carried forward* at their last-known value (never zeroed) and stats are clamped so they can never decrease. So R+ images simply **froze** at their pre-split value rather than losing data.
+
+**What changes now:**
+- R+ images are rediscovered on `civitai.red` and resume receiving fresh stats.
+- Images not returned by either domain in a run are flagged `stale: true` and shown with a **frozen** badge in the extension (likely migrated or removed).
+- Image links point at the correct domain (`civitai.com` or `civitai.red`).
+
+**⚠️ One-time catch-up bump:** the first successful `.red` run records each previously-frozen image at its *current* (higher) total. Because stats are stored as gains-over-time, all the reactions earned while the image was frozen appear as a **single spike** on that date. This is expected — those reactions are real, but Civitai's API never exposed *when* each one arrived, so they can't be spread across the gap.
 
 ## Troubleshooting
 
