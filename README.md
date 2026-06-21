@@ -65,11 +65,13 @@ Chrome Extension ◄── reads ◄── gist.githubusercontent.com
 | `GIST_TOKEN` | Your Personal Access Token from step 2 | ✅ Yes |
 | `CIVITAI_USERNAME` | Your Civitai username | ✅ Yes |
 | `CIVITAI_API_KEY` | Your Civitai API key (helps get accurate stats) | ⚠️ Optional |
-| `CIVITAI_RED_API_KEY` | API key for civitai.red (R+ content). Falls back to `CIVITAI_API_KEY` if unset | ⚠️ Optional |
+| `CIVITAI_RED_API_KEY` | Rarely needed — your one account-wide `CIVITAI_API_KEY` already works on civitai.red. Optional override only | ⚠️ Optional |
 
 **Note:** The `CIVITAI_API_KEY` is optional but recommended. Without it, the script uses unauthenticated requests which may have lower rate limits.
 
-**civitai.red (R-rated and harder content):** Civitai moved R+ content to a separate domain, `civitai.red`. The collector now queries **both** `civitai.com` and `civitai.red` so reactions on your R+ images keep being tracked. This is on by default; set the `CIVITAI_RED_ENABLED` repo variable to `false` to disable it. If your `.com` API key doesn't authorize `.red`, add a dedicated `CIVITAI_RED_API_KEY` secret. See [civitai.red split](#civitairred-split-r-content) below for what happens to images tracked before the split.
+**civitai.red (R-rated and harder content):** Civitai moved R+ content to a separate domain, `civitai.red`. The collector now queries **both** `civitai.com` and `civitai.red` so reactions on your R+ images keep being tracked. This is on by default; set the `CIVITAI_RED_ENABLED` repo variable to `false` to disable it.
+
+Civitai issues a **single account-wide API key** (civitai.com → Account settings → **API Keys**) that works on **both** domains — there is no separate "civitai.red" key. In fact bulk discovery works even with no key at all, so just leave `CIVITAI_RED_API_KEY` **unset** unless you have a specific reason to use a different key for `.red`. See [civitai.red split](#civitairred-split-r-content) below for what happens to images tracked before the split.
 
 ### 4. Enable GitHub Actions
 
