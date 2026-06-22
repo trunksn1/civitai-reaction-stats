@@ -38,6 +38,15 @@
 
     <!-- Main Content -->
     <main class="main-content" id="mainContent" style="display: none;">
+      <!-- Tab navigation -->
+      <nav class="tab-bar" id="tabBar">
+        <button class="tab-btn active" data-tab="overview">Overview</button>
+        <button class="tab-btn" data-tab="trends">Trends</button>
+        <button class="tab-btn" data-tab="images">Images</button>
+      </nav>
+
+      <!-- Overview Tab -->
+      <section class="tab-panel" id="tab-overview">
       <!-- Summary Cards -->
       <section class="summary-cards" id="summaryCards">
         <div class="card summary-card" data-type="total">
@@ -114,6 +123,27 @@
         </div>
       </section>
 
+      <!-- Overview widgets -->
+      <section class="overview-grid">
+        <div class="card overview-widget">
+          <h2 class="widget-title">Reaction mix <span class="widget-sub">today</span></h2>
+          <div class="reaction-mix" id="reactionMix"></div>
+        </div>
+        <div class="card overview-widget widget-wide">
+          <h2 class="widget-title">Daily activity <span class="widget-sub">last 14 days</span></h2>
+          <div class="activity-chart-wrapper">
+            <canvas id="overviewActivityChart"></canvas>
+          </div>
+        </div>
+        <div class="card overview-widget widget-wide">
+          <h2 class="widget-title">Top movers <span class="widget-sub">last 7 days</span></h2>
+          <div class="top-movers" id="topMovers"></div>
+        </div>
+      </section>
+      </section><!-- /tab-overview -->
+
+      <!-- Trends Tab -->
+      <section class="tab-panel" id="tab-trends" hidden>
       <!-- Overview Chart -->
       <section class="card chart-section">
         <div class="chart-header">
@@ -224,7 +254,10 @@
         </div>
         <div class="period-summary" id="periodSummary"></div>
       </section>
+      </section><!-- /tab-trends -->
 
+      <!-- Images Tab -->
+      <section class="tab-panel" id="tab-images" hidden>
       <!-- Images Section -->
       <section class="card images-section">
         <div class="images-header">
@@ -285,6 +318,7 @@
           <button class="btn btn-secondary" id="loadMoreBtn">Load More</button>
         </div>
       </section>
+      </section><!-- /tab-images -->
     </main>
   </div>
 
