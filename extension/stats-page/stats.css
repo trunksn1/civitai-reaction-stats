@@ -554,6 +554,27 @@ body {
   margin-bottom: 8px;
 }
 
+.host-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 600;
+  vertical-align: middle;
+  cursor: help;
+}
+
+.host-badge.red {
+  background-color: rgba(240, 62, 62, 0.18);
+  color: #ff8787;
+}
+
+.host-badge.stale {
+  background-color: rgba(252, 196, 25, 0.15);
+  color: #fcc419;
+}
+
 .image-stats {
   display: flex;
   flex-wrap: wrap;

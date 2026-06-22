@@ -1322,6 +1322,10 @@ function createImageCard(image) {
   const date = image.createdAt ? formatDate(new Date(image.createdAt)) : 'Unknown';
   const hasSnapshots = image.snapshots && image.snapshots.length > 1;
 
+  const badges =
+    (image.host === 'red' ? '<span class="host-badge red" title="Hosted on civitai.red (R+)">.red</span>' : '') +
+    (image.stale ? '<span class="host-badge stale" title="Not returned by the API on the latest run — stats are frozen at their last-known value (possibly migrated or removed)">frozen</span>' : '');
+
   return `
     <div class="image-card" data-image-id="${escapeHtml(image.id)}">
       <div class="image-card-header">
@@ -1337,7 +1341,7 @@ function createImageCard(image) {
               ${escapeHtml(image.name || `Image ${image.id}`)}
             </a>
           </div>
-          <div class="image-date">${date}</div>
+          <div class="image-date">${date}${badges}</div>
           <div class="image-stats">
             <span class="stat-badge likes">
               &#x1F44D;
