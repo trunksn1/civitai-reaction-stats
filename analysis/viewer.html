@@ -70,6 +70,14 @@
   th { color: var(--muted); font-weight: 600; }
   .note { color: var(--muted); font-size: 12px; margin-top: 10px; }
   code { background: #000; padding: 1px 5px; border-radius: 4px; }
+  .prose { max-width: 760px; }
+  .prose h2 { font-size: 18px; margin: 26px 0 8px; }
+  .prose h2:first-child { margin-top: 4px; }
+  .prose h3 { font-size: 15px; margin: 18px 0 6px; color: var(--accent); }
+  .prose p { margin: 8px 0; color: #cdd1d6; }
+  .prose ul { margin: 8px 0; padding-left: 22px; color: #cdd1d6; }
+  .prose li { margin: 5px 0; }
+  .prose strong { color: var(--text); }
   .tip { position: fixed; pointer-events: none; background: #000; color: #fff; padding: 6px 8px;
     border-radius: 6px; font-size: 12px; opacity: 0; transition: opacity .08s; z-index: 10; white-space: nowrap; }
 </style>
@@ -90,6 +98,7 @@
   <div class="tabs">
     <button data-tab="when" class="active">⏰ When to post</button>
     <button data-tab="data">📊 The data (years & months)</button>
+    <button data-tab="about">ℹ️ How it works</button>
   </div>
 
   <!-- ================= TAB 1: WHEN TO POST ================= -->
@@ -165,6 +174,71 @@
       <h3>Year-over-year</h3>
       <table id="yearTable"></table>
       <div class="note">“Median/Mean/P90” describe each year’s top images. Coverage <em>partial</em> means the pull didn’t reach the per-year cap (raise <code>MAX_PAGES</code> and re-run).</div>
+    </div>
+  </div>
+
+  <!-- ================= TAB 3: HOW IT WORKS ================= -->
+  <div class="tab" id="tab-about">
+    <div class="panel prose">
+      <h2>What this tool is trying to answer</h2>
+      <p>One simple question: <strong>is there a better day and hour to post on Civitai?</strong> If you’re about to upload an image, does it matter whether you do it on a Tuesday afternoon or a Saturday night — or is it all the same?</p>
+      <p>To answer that honestly, the tool looks at thousands of the <em>most-reacted</em> images on Civitai, checks <strong>when each one was posted</strong>, and compares that against <strong>when images get posted in general</strong>. The gap between those two is the answer.</p>
+
+      <h2>Where the data comes from</h2>
+      <p>A companion script (<code>analyze-posting-times.js</code>) talks to Civitai’s public API and gathers two separate piles of information. It does <strong>not</strong> download any pictures — for each image it only notes a couple of plain facts.</p>
+
+      <h3>Pile 1 — “the winners” (the Top pull)</h3>
+      <p>It asks Civitai for its <strong>most-reacted images</strong>, working from the all-time champions downward, across every content rating (safe → explicit). For each one it records just two things:</p>
+      <ul>
+        <li><strong>When it was posted</strong> — the exact date and hour.</li>
+        <li><strong>How many reactions it got</strong> — likes + hearts + laughs + cries added together.</li>
+      </ul>
+      <p>Everything else — the image itself, the prompt, the author — is thrown away. These winners are then sorted into <strong>calendar-year buckets</strong> (2022, 2023, …), keeping roughly the top 5,000 of each year.</p>
+
+      <h3>Pile 2 — “everybody” (the Baseline pull)</h3>
+      <p>Then it grabs a big sample of <strong>recent uploads sorted by newest</strong>, completely ignoring how popular they are — the famous and the ignored, all mixed together. Again, only the timestamp is kept. This pile answers “<em>when do people normally post?</em>”</p>
+
+      <h2>The key idea: “lift” (why we need the baseline)</h2>
+      <p>Here’s the trap this tool exists to avoid. Imagine that <strong>40% of all uploads</strong> happen on Saturday evening. Then naturally about 40% of the <em>winners</em> were also posted Saturday evening — but that’s just because <em>that’s when everyone posts</em>, not because it’s a magic time.</p>
+      <p>So instead of “when were the winners posted?”, the tool computes <strong>lift</strong>:</p>
+      <p style="text-align:center; font-size:15px"><strong>lift</strong> = (winners’ share of a day/hour) ÷ (everybody’s share of that day/hour)</p>
+      <ul>
+        <li><strong>lift &gt; 1</strong> (shown <span style="color:var(--red)">red</span>) → that slot <strong>over-performs</strong>: winners land there <em>more</em> than raw posting volume would predict. A genuinely good time to post.</li>
+        <li><strong>lift &lt; 1</strong> (shown <span style="color:var(--blue)">blue</span>) → that slot <strong>under-performs</strong>.</li>
+        <li><strong>lift ≈ 1</strong> → no advantage either way.</li>
+      </ul>
+      <p>That single ratio is the honest core of the whole tool.</p>
+
+      <h2>How to read each chart</h2>
+      <h3>⏰ When to post</h3>
+      <ul>
+        <li><strong>Day × hour heatmap</strong> — a whole week as a grid (7 rows = days, 24 columns = hours). In <em>Lift</em> mode, red squares are good times, blue are weak. The <em>Top volume</em> and <em>Baseline</em> buttons show the raw counts behind the lift, if you’re curious.</li>
+        <li><strong>Best hour of day</strong> — the same lift, collapsed into 24 bars so you can see which hours win. Bars above the dashed 1× line over-perform.</li>
+        <li><strong>Best day of week</strong> — lift collapsed into 7 weekday bars.</li>
+        <li><strong>The cards at the top</strong> spell out the single best slot, hour and day for the year you’ve selected.</li>
+      </ul>
+      <h3>📊 The data (years &amp; months)</h3>
+      <ul>
+        <li><strong>Timeline</strong> — one bar per month across every year. This is the platform’s <em>rise and fall</em>: you can literally see the boom and the decline. Toggle between image <em>count</em> and <em>median reactions</em>.</li>
+        <li><strong>Top images per month</strong> — the selected year broken into its 12 months.</li>
+        <li><strong>Reaction-size distribution</strong> — how <em>big</em> the winners were that year (how many landed in 1k–2.5k reactions, 5k–10k, etc.).</li>
+        <li><strong>Year-over-year table</strong> — median/mean/peak reactions per year, plus whether that year’s sample is “full” or “partial”.</li>
+      </ul>
+
+      <h2>A few things to keep in mind (honesty notes)</h2>
+      <ul>
+        <li><strong>All times are UTC.</strong> Use the <em>Timezone</em> selector at the top to shift the time-based charts to your own local hours.</li>
+        <li><strong>The month / timeline charts are raw counts, not lift.</strong> The baseline only covers recent weeks, so it can’t fairly judge “best month” of years past. Treat those as “here’s what was collected”, and treat the day/hour <em>lift</em> as the real “best time” answer.</li>
+        <li><strong>Older images had longer to collect reactions.</strong> That mainly affects comparing reaction <em>sizes</em> across years (the boom/decline magnitude), not the within-year day/hour pattern.</li>
+        <li><strong>We only look at winners.</strong> Lift controls for posting volume, but it can’t tell you <em>why</em> a slot wins (more people online? the feed algorithm? luck on a small sample).</li>
+        <li><strong>The baseline’s weekly rhythm is assumed steady over time.</strong> Reasonable, but an assumption — not a measurement.</li>
+        <li><strong>Before you load real data, the numbers are fake.</strong> The viewer ships with a synthetic demo (with a planted “Tue–Thu afternoon wins” pattern) just to show the layout.</li>
+      </ul>
+
+      <h2>Refreshing the data</h2>
+      <p>To get fresh numbers, re-run the pull where it has internet access to Civitai (your PC or a GitHub Action):</p>
+      <p><code>node analyze-posting-times.js</code></p>
+      <p>That writes <code>posting-analysis.json</code> (what this page loads) and <code>posting-raw.json</code> (the slim raw data). After that first pull, any future view change can be recomputed instantly — with no second trip to the API — using <code>node analyze-posting-times.js --in posting-raw.json</code>. Then load the JSON here via <strong>Choose File</strong>.</p>
     </div>
   </div>
 
