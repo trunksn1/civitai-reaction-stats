@@ -237,13 +237,16 @@ async function collectBaseline() {
   }
 
   const byId = new Map();           // new rows from this run (deduped by id)
-  // Seed span from prior so we don't lose ground if the first new page fails.
-  let span = 0;
+  // Track a monotonic "frontier" (how far back we've reached). Seed it from the
+  // prior rows on resume so we don't lose ground if the first new page fails.
+  let span = 0, frontierTs = newestTs;
   if (newestTs !== null && prior.length) {
     let oldest = newestTs;
     for (const r of prior) { const t = new Date(r.createdAt).getTime(); if (Number.isFinite(t) && t < oldest) oldest = t; }
+    frontierTs = oldest;
     span = newestTs - oldest;
   }
+  const OUTLIER_MS = 3 * 86400000;  // an item >3 days older than the frontier is a backdated outlier
   const allRows = () => { const out = prior.slice(); for (const v of byId.values()) out.push(v); return out; };
   let resumeCursor = startUrl, pagesSinceSave = 0, completed = false;
 
@@ -260,8 +263,13 @@ async function collectBaseline() {
           if (!it?.createdAt) continue;
           const t = new Date(it.createdAt).getTime();
           if (!Number.isFinite(t)) continue;
-          if (newestTs === null) newestTs = t;
-          span = newestTs - t;                            // items arrive newest-first
+          if (newestTs === null) { newestTs = t; frontierTs = t; }
+          // Skip backdated/imported (years-old) and future-dated (scheduled)
+          // images — they aren't "recent posting" and would corrupt the span.
+          if (t > newestTs + 86400000) continue;
+          if (frontierTs !== null && t < frontierTs - OUTLIER_MS) continue;
+          if (frontierTs === null || t < frontierTs) frontierTs = t;
+          span = newestTs - frontierTs;                   // robust: based on the monotonic frontier
           if (byId.has(it.id)) continue;
           byId.set(it.id, { createdAt: it.createdAt });
         }
@@ -295,24 +303,27 @@ function emptyMatrix() {
 // less than a week, we can't balance it — return weeks:0 so the caller can warn
 // that some weekdays are under-covered.
 function wholeWeekWindow(rows) {
-  // Manual min/max — Math.max(...bigArray) overflows the stack past ~100k items.
-  let max = -Infinity, min = Infinity;
+  // Civitai's Newest feed contains occasional backdated/imported images (and
+  // future-dated scheduled ones), which would make the span look like years.
+  // Be robust: drop future dates, and use the 0.5th-percentile timestamp as the
+  // "oldest" so a handful of outliers can't blow up the week count.
+  const now = Date.now();
+  const ts = [];
   for (const r of rows) {
     const t = new Date(r.createdAt).getTime();
-    if (!Number.isFinite(t)) continue;
-    if (t > max) max = t;
-    if (t < min) min = t;
+    if (Number.isFinite(t) && t <= now + 86400000) ts.push(t);
   }
-  if (!Number.isFinite(max)) return { rows, weeks: 0, days: 0 };
-  const days = (max - min) / 86400000;
-  if (days < 7) return { rows, weeks: 0, days };   // sub-week: can't balance
-  const weeks = Math.floor(days / 7);
-  const cutoff = max - weeks * 7 * 86400000;
+  if (ts.length === 0) return { rows: [], weeks: 0, days: 0 };
+  ts.sort((a, b) => a - b);
+  const anchor = ts[ts.length - 1];                       // newest
+  const robustMin = ts[Math.floor(ts.length * 0.005)];    // ignore bottom 0.5% as outliers
+  const days = (anchor - robustMin) / 86400000;
+  const cutoff = days < 7 ? robustMin : anchor - Math.floor(days / 7) * 7 * 86400000;
   const kept = rows.filter(r => {
     const t = new Date(r.createdAt).getTime();
-    return Number.isFinite(t) && t >= cutoff;
+    return Number.isFinite(t) && t >= cutoff && t <= anchor + 1;
   });
-  return { rows: kept, weeks, days };
+  return { rows: kept, weeks: days < 7 ? 0 : Math.floor(days / 7), days };
 }
 
 // Bucket a list of {createdAt} into a 7x24 [day][hour] matrix (UTC).
