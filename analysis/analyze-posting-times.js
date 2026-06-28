@@ -44,9 +44,13 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const CIVITAI_API_KEY = process.env.CIVITAI_API_KEY || '';
 const PER_YEAR = intEnv('PER_YEAR', 5000);
-const MAX_PAGES = intEnv('MAX_PAGES', 300);
+// Pages (×200 imgs) per nsfw level. Kept modest on purpose: the most-reacted
+// stream front-loads the busy years, so a few thousand per level is plenty to
+// fill most year buckets, and going deeper mostly just hammers the API (which
+// starts returning 503s). Raise it if quiet years come back "partial".
+const MAX_PAGES = intEnv('MAX_PAGES', 60);
 const BASELINE_TARGET = intEnv('BASELINE_TARGET', 20000);
-const PAGE_DELAY_MS = intEnv('PAGE_DELAY_MS', 500);
+const PAGE_DELAY_MS = intEnv('PAGE_DELAY_MS', 800);
 const NSFW_LEVELS = (process.env.NSFW_LEVELS || 'None,Soft,Mature,X')
   .split(',').map(s => s.trim()).filter(Boolean);
 const OUT = process.env.OUT || join(__dirname, 'posting-analysis.json');
@@ -54,7 +58,7 @@ const RAW_OUT = process.env.RAW_OUT || '';
 
 const API_BASE = 'https://civitai.com/api/v1';
 const PAGE_LIMIT = 200;
-const MAX_RETRIES = 4;
+const MAX_RETRIES = 6;
 
 // ---------- small utils ----------
 function intEnv(name, def) {
@@ -70,16 +74,20 @@ function totalReactions(stats = {}) {
          (stats.laughCount || 0) + (stats.cryCount || 0);
 }
 
-async function fetchWithRetry(url, backoff = 1000) {
+async function fetchWithRetry(url, backoff = 1500) {
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
       const headers = {};
       if (CIVITAI_API_KEY) headers['Authorization'] = `Bearer ${CIVITAI_API_KEY}`;
       const res = await fetch(url, { headers });
-      if (res.status === 429) {
+      // 429 (rate limited) and 5xx (server overloaded, e.g. the 503s Civitai
+      // throws under sustained load) are transient — wait and retry rather than
+      // treat them as fatal.
+      if (res.status === 429 || res.status >= 500) {
+        if (attempt === MAX_RETRIES) throw new Error(`HTTP ${res.status} ${res.statusText}`);
         const retryAfter = parseInt(res.headers.get('Retry-After') || '', 10);
         const wait = Number.isFinite(retryAfter) ? retryAfter * 1000 : backoff;
-        console.log(`  rate limited, waiting ${wait}ms (attempt ${attempt})`);
+        console.log(`  server busy (HTTP ${res.status}), waiting ${wait}ms (attempt ${attempt}/${MAX_RETRIES})`);
         await sleep(wait); backoff *= 2; continue;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
@@ -123,20 +131,26 @@ async function collectTopImages() {
     const nsfwParam = level === 'None' ? '' : `&nsfw=${encodeURIComponent(level)}`;
     const url = `${API_BASE}/images?limit=${PAGE_LIMIT}&sort=${encodeURIComponent('Most Reactions')}&period=AllTime${nsfwParam}`;
     console.log(`\nTop pull — nsfw=${level}`);
-    await paginate(url, `top:${level}`, {
-      maxPages: MAX_PAGES,
-      onItems: items => {
-        for (const it of items) {
-          if (!it?.createdAt || byId.has(it.id)) continue;
-          byId.set(it.id, {
-            id: it.id,
-            createdAt: it.createdAt,
-            reactions: totalReactions(it.stats),
-            stats: it.stats || {},
-          });
-        }
-      },
-    });
+    // If the API gives up on this level (e.g. sustained 503s), keep everything
+    // collected so far and move on — never throw the whole run's work away.
+    try {
+      await paginate(url, `top:${level}`, {
+        maxPages: MAX_PAGES,
+        onItems: items => {
+          for (const it of items) {
+            if (!it?.createdAt || byId.has(it.id)) continue;
+            byId.set(it.id, {
+              id: it.id,
+              createdAt: it.createdAt,
+              reactions: totalReactions(it.stats),
+              stats: it.stats || {},
+            });
+          }
+        },
+      });
+    } catch (err) {
+      console.log(`  ⚠️  [top:${level}] stopped early (${err.message}); keeping ${byId.size} images collected so far and continuing.`);
+    }
   }
   return Array.from(byId.values());
 }
@@ -150,17 +164,21 @@ async function collectBaseline() {
     const url = `${API_BASE}/images?limit=${PAGE_LIMIT}&sort=Newest&period=AllTime${nsfwParam}`;
     let kept = 0;
     console.log(`\nBaseline pull — nsfw=${level} (target ${perLevel})`);
-    await paginate(url, `base:${level}`, {
-      maxPages: Math.ceil(perLevel / PAGE_LIMIT) + 2,
-      shouldStop: () => kept >= perLevel,
-      onItems: items => {
-        for (const it of items) {
-          if (!it?.createdAt || byId.has(it.id)) continue;
-          byId.set(it.id, { createdAt: it.createdAt });
-          kept++;
-        }
-      },
-    });
+    try {
+      await paginate(url, `base:${level}`, {
+        maxPages: Math.ceil(perLevel / PAGE_LIMIT) + 2,
+        shouldStop: () => kept >= perLevel,
+        onItems: items => {
+          for (const it of items) {
+            if (!it?.createdAt || byId.has(it.id)) continue;
+            byId.set(it.id, { createdAt: it.createdAt });
+            kept++;
+          }
+        },
+      });
+    } catch (err) {
+      console.log(`  ⚠️  [base:${level}] stopped early (${err.message}); keeping ${byId.size} baseline rows and continuing.`);
+    }
   }
   return Array.from(byId.values());
 }
