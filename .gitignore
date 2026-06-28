@@ -21,3 +21,4 @@ PLAN.md
 analysis/posting-analysis.json
 analysis/posting-raw.json
 analysis/*-raw.json
+analysis/baseline-checkpoint.json

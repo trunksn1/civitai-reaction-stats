@@ -78,7 +78,11 @@ All optional, via env vars:
 
 ### Rough cost
 
-5000/year × ~5 years from a single reaction-sorted stream, plus a 20k baseline, is roughly a few hundred page requests at 0.5s each — minutes, not hours. Deep coverage of very quiet years costs more pages (that's what `MAX_PAGES` caps).
+5000/year × ~5 years from a single reaction-sorted stream, plus a one-week baseline, is roughly a few hundred page requests — minutes, not hours. The baseline is the long pole, because it must page through every upload in a week.
+
+### Resuming an interrupted baseline pull
+
+Civitai's API returns intermittent `503`s under sustained pagination, and the baseline can fail before it reaches a full week. Rather than re-scraping from "now" every time, the pull **checkpoints**: it saves the rows collected so far plus the API cursor of where it stopped to `baseline-checkpoint.json` (gitignored). On the next run it **resumes** — paging *further back* from that cursor instead of starting over — and also reuses the previous run's top images (skipping the slow top pull). So a week that needs 2–3 attempts on a flaky day will accumulate across runs instead of looping. The checkpoint is auto-deleted once a full week is collected; delete it manually to force a fresh start.
 
 ## Files
 

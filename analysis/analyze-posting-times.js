@@ -37,7 +37,7 @@
  *   RAW_OUT             If set, also dump the raw collected images here
  */
 
-import { writeFileSync, readFileSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync, unlinkSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -72,6 +72,10 @@ const OUT = process.env.OUT || join(__dirname, 'posting-analysis.json');
 // written on a live fetch so you can recompute any view later with
 // `--in posting-raw.json` — no second trip to the API.
 const RAW_OUT = process.env.RAW_OUT || join(__dirname, 'posting-raw.json');
+// Resume file for the baseline pull. If the API 503s before a full week is
+// collected, progress (rows + the cursor to continue from) is saved here so the
+// next run picks up where it left off instead of re-scraping from "now".
+const CHECKPOINT = process.env.BASELINE_CHECKPOINT || join(__dirname, 'baseline-checkpoint.json');
 
 const API_BASE = 'https://civitai.com/api/v1';
 const PAGE_LIMIT = 200;
@@ -119,9 +123,11 @@ async function fetchWithRetry(url, backoff = 1500) {
 
 /**
  * Cursor-paginate an images query, invoking onItems(items) per page.
- * Stops when: shouldStop() is true, no nextPage, or maxPages reached.
+ * onPage(followingCursor) is called after each page with the cursor for the
+ * NEXT page — used to checkpoint a resume point. Stops when: shouldStop() is
+ * true, no nextPage, or maxPages reached.
  */
-async function paginate(startUrl, label, { maxPages, onItems, shouldStop }) {
+async function paginate(startUrl, label, { maxPages, onItems, shouldStop, onPage }) {
   let next = startUrl, page = 0, total = 0;
   while (next && page < maxPages) {
     page++;
@@ -129,11 +135,13 @@ async function paginate(startUrl, label, { maxPages, onItems, shouldStop }) {
     const items = data?.items || [];
     total += items.length;
     onItems(items);
+    const following = data?.metadata?.nextPage || null;   // cursor for the page after this one
+    if (onPage) onPage(following);
     if (page % 10 === 0 || items.length === 0) {
       console.log(`  [${label}] page ${page}, ${total} items so far`);
     }
     if (shouldStop && shouldStop()) { console.log(`  [${label}] target reached, stopping at page ${page}`); break; }
-    next = data?.metadata?.nextPage || null;
+    next = following;
     if (next) await sleep(PAGE_DELAY_MS);
   }
   console.log(`  [${label}] done: ${page} pages, ${total} items`);
@@ -181,40 +189,99 @@ async function collectTopImages() {
   return Array.from(byId.values());
 }
 
+// --- baseline checkpoint (resume a partial pull) ---
+function loadBaselineCheckpoint() {
+  try {
+    if (!existsSync(CHECKPOINT)) return null;
+    const cp = JSON.parse(readFileSync(CHECKPOINT, 'utf8'));
+    if (cp.complete) return null;                                   // already finished
+    if (cp.nsfw !== BASELINE_NSFW || cp.weeks !== BASELINE_WEEKS) return null;  // config changed
+    if (!cp.cursor || !Array.isArray(cp.rows) || !cp.newestTs) return null;
+    const ageDays = (Date.now() - new Date(cp.savedAt).getTime()) / 86400000;
+    if (!(ageDays >= 0) || ageDays > 14) return null;              // too stale to extend
+    return cp;
+  } catch { return null; }
+}
+function saveBaselineCheckpoint(rows, cursor, newestTs, complete) {
+  try {
+    writeFileSync(CHECKPOINT, JSON.stringify({
+      nsfw: BASELINE_NSFW, weeks: BASELINE_WEEKS, savedAt: new Date().toISOString(),
+      newestTs, cursor, complete, rows,
+    }));
+  } catch (e) { console.log(`  (could not write checkpoint: ${e.message})`); }
+}
+function clearBaselineCheckpoint() { try { if (existsSync(CHECKPOINT)) unlinkSync(CHECKPOINT); } catch {} }
+
 async function collectBaseline() {
-  // Reaction-agnostic upload rhythm from a SINGLE Newest stream. We page back
-  // until the timestamps span BASELINE_WEEKS*7 days. One stream (not one per
-  // nsfw level) is deliberate: every kept image stays on the same timeline, so
-  // a high-volume level can't dump one recent day and swamp the distribution,
-  // and it's ~4x less load on the API.
-  const byId = new Map();
+  // Reaction-agnostic upload rhythm from a SINGLE Newest stream, paged back
+  // until it spans BASELINE_WEEKS*7 days. One stream keeps every image on the
+  // same timeline (no swamping) and is ~4x less load. If the API 503s before a
+  // full week, we save a checkpoint (rows + the cursor to continue from) so a
+  // re-run RESUMES paging further back instead of re-scraping from "now".
   const spanMs = BASELINE_WEEKS * 7 * 86400 * 1000;
   const nsfwParam = (!BASELINE_NSFW || BASELINE_NSFW === 'None') ? '' : `&nsfw=${encodeURIComponent(BASELINE_NSFW)}`;
-  const url = `${API_BASE}/images?limit=${PAGE_LIMIT}&sort=Newest&period=AllTime${nsfwParam}`;
-  let kept = 0, newestTs = null, span = 0;
-  console.log(`\nBaseline pull — single ${BASELINE_NSFW} stream (paging back ${BASELINE_WEEKS} week(s))`);
+  const freshUrl = `${API_BASE}/images?limit=${PAGE_LIMIT}&sort=Newest&period=AllTime${nsfwParam}`;
+
+  const prior = [];                 // rows from a previous (resumed) run — already older-frontier, no overlap
+  let newestTs = null, startUrl = freshUrl;
+  const cp = loadBaselineCheckpoint();
+  if (cp) {
+    for (const r of cp.rows) prior.push(r);
+    newestTs = cp.newestTs;
+    startUrl = cp.cursor;
+    let oldest = newestTs;
+    for (const r of prior) { const t = new Date(r.createdAt).getTime(); if (Number.isFinite(t) && t < oldest) oldest = t; }
+    console.log(`\nResuming baseline from checkpoint: ${prior.length} rows (~${((newestTs - oldest) / 86400000).toFixed(1)} days) — continuing further back…`);
+  } else {
+    console.log(`\nBaseline pull — single ${BASELINE_NSFW} stream (paging back ${BASELINE_WEEKS} week(s))`);
+  }
+
+  const byId = new Map();           // new rows from this run (deduped by id)
+  // Seed span from prior so we don't lose ground if the first new page fails.
+  let span = 0;
+  if (newestTs !== null && prior.length) {
+    let oldest = newestTs;
+    for (const r of prior) { const t = new Date(r.createdAt).getTime(); if (Number.isFinite(t) && t < oldest) oldest = t; }
+    span = newestTs - oldest;
+  }
+  const allRows = () => { const out = prior.slice(); for (const v of byId.values()) out.push(v); return out; };
+  let resumeCursor = startUrl, pagesSinceSave = 0, completed = false;
+
   try {
-    await paginate(url, 'base', {
+    await paginate(startUrl, 'base', {
       maxPages: BASELINE_MAX_PAGES,
       shouldStop: () => span >= spanMs,
+      onPage: following => {
+        resumeCursor = following;                        // where to continue if we stop now
+        if (++pagesSinceSave >= 25) { pagesSinceSave = 0; saveBaselineCheckpoint(allRows(), resumeCursor, newestTs, false); }
+      },
       onItems: items => {
         for (const it of items) {
           if (!it?.createdAt) continue;
           const t = new Date(it.createdAt).getTime();
           if (!Number.isFinite(t)) continue;
           if (newestTs === null) newestTs = t;
-          span = newestTs - t;                 // items arrive newest-first
+          span = newestTs - t;                            // items arrive newest-first
           if (byId.has(it.id)) continue;
           byId.set(it.id, { createdAt: it.createdAt });
-          kept++;
         }
       },
     });
+    completed = span >= spanMs;
   } catch (err) {
-    console.log(`  ⚠️  [base] stopped early (${err.message}); keeping ${byId.size} baseline rows.`);
+    console.log(`  ⚠️  [base] stopped early (${err.message}); progress saved — re-run to resume.`);
   }
-  console.log(`  [base] spanned ${(span / 86400000).toFixed(1)} days, ${kept} kept`);
-  return Array.from(byId.values());
+
+  const rows = allRows();
+  if (completed) {
+    clearBaselineCheckpoint();
+    console.log(`  [base] spanned ${(span / 86400000).toFixed(1)} days, ${rows.length} rows — COMPLETE (checkpoint cleared)`);
+  } else {
+    saveBaselineCheckpoint(rows, resumeCursor, newestTs, false);
+    console.log(`  [base] spanned ${(span / 86400000).toFixed(1)} days, ${rows.length} rows — INCOMPLETE.`);
+    console.log(`         Re-run \`node analyze-posting-times.js\` to resume from here (or delete baseline-checkpoint.json to start over).`);
+  }
+  return rows;
 }
 
 // ---------- analysis ----------
@@ -480,7 +547,16 @@ async function main() {
   } else {
     console.log('Live fetch from civitai.com (this can take a while)…');
     if (!CIVITAI_API_KEY) console.log('No CIVITAI_API_KEY set — using unauthenticated requests.');
-    topImages = await collectTopImages();
+    // If we're resuming a partial baseline, don't re-scrape the (slow) top pull —
+    // reuse the top images from the last run's raw dump.
+    const resumingBaseline = loadBaselineCheckpoint() !== null;
+    if (resumingBaseline && existsSync(RAW_OUT)) {
+      try {
+        topImages = JSON.parse(readFileSync(RAW_OUT, 'utf8')).topImages || [];
+        console.log(`Resuming: reusing ${topImages.length} top images from ${RAW_OUT} (skipping the top pull).`);
+      } catch { topImages = null; }
+    }
+    if (!topImages) topImages = await collectTopImages();
     baselineRows = await collectBaseline();
     console.log(`\nCollected ${topImages.length} unique top images, ${baselineRows.length} baseline rows.`);
     if (RAW_OUT) {
