@@ -302,6 +302,20 @@ const rowSums=m=>m.map(r=>r.reduce((s,v)=>s+v,0));
 function drawHeatmap(el, topM, baseM, hmode){
   const top=shiftMatrix(topM,tzOffset), base=shiftMatrix(baseM,tzOffset);
   const tT=sumM(top)||1, bT=sumM(base)||1;
+  // Smoothed baseline for lift: a partial-week pull can leave some day/hour
+  // cells empty, which would blank out their lift. Fill gaps with a separable
+  // estimate base(d,h) ≈ dayShare(d) × hourShare(h), blended with the real
+  // count. Every weekday/hour that appears at all then yields a usable cell.
+  const baseDay=rowSums(base), baseHour=colSums(base);
+  const K=2;                                  // prior strength (counts of separable estimate)
+  // Day/hour shares with a small floor, so even a weekday or hour with *zero*
+  // baseline still gets a nonzero estimate (filled from the average pattern).
+  const epsD=(bT/7)*0.02, epsH=(bT/24)*0.02;
+  const dayShare=d=>(baseDay[d]+epsD)/(bT+7*epsD);
+  const hourShare=h=>(baseHour[h]+epsH)/(bT+24*epsH);
+  const expected=(d,h)=> bT*dayShare(d)*hourShare(h);
+  let smoothTotal=0;
+  for(let d=0;d<7;d++)for(let h=0;h<24;h++) smoothTotal += base[d][h] + K*expected(d,h);
   el.innerHTML='';
   el.appendChild(dom('div','hd',''));
   for(let h=0;h<24;h++) el.appendChild(dom('div','hd',h%3===0?String(h):''));
@@ -311,7 +325,7 @@ function drawHeatmap(el, topM, baseM, hmode){
   for(let d=0;d<7;d++)for(let h=0;h<24;h++){
     if(hmode==='top') vals[d][h]=top[d][h];
     else if(hmode==='base') vals[d][h]=base[d][h];
-    else { const bs=base[d][h]/bT; vals[d][h]= bs>0?(top[d][h]/tT)/bs:null; }
+    else { const sb=(base[d][h]+K*expected(d,h))/(smoothTotal||1); vals[d][h]= sb>0?(top[d][h]/tT)/sb:null; }
     if(hmode!=='lift' && vals[d][h]>maxSeq) maxSeq=vals[d][h];
   }
   for(let d=0;d<7;d++){
@@ -362,7 +376,7 @@ function renderWhen(year){
   const mn=document.getElementById('modeNote');
   if(mode==='lift'){ legBar.style.background='linear-gradient(90deg,'+liftColor(0.33)+','+liftColor(1)+','+liftColor(3)+')';
     txt('legLo','0.5× under'); txt('legHi','2× over'); txt('legExpl','red over-performs · blue under · faded = few images');
-    mn.innerHTML='🎯 <b>Lift vs. baseline — this is the actual answer.</b> Each square asks: do images posted at this day+hour do <b>better than you’d expect</b>? <b style="color:var(--red)">Red</b> = yes, posting then tends to over-perform; <b style="color:var(--blue)">blue</b> = worse than average. It works by dividing “when the winners were posted” by “when everything is posted”, so it isn’t fooled by simply-busy hours. <span style="color:var(--muted)">Faded squares have too few images to trust — tune with the Confidence selector.</span>';
+    mn.innerHTML='🎯 <b>Lift vs. baseline — this is the actual answer.</b> Each square asks: do images posted at this day+hour do <b>better than you’d expect</b>? <b style="color:var(--red)">Red</b> = yes, posting then tends to over-perform; <b style="color:var(--blue)">blue</b> = worse than average. It works by dividing “when the winners were posted” by “when everything is posted”, so it isn’t fooled by simply-busy hours. <span style="color:var(--muted)">Faded squares have too few images to trust — tune with the Confidence selector. Gaps in a partial-week baseline are filled with a day×hour pattern estimate, so no cell is blank.</span>';
   } else if(mode==='top'){ legBar.style.background='linear-gradient(90deg,'+seqColor(0)+','+seqColor(1)+')';
     txt('legLo','few'); txt('legHi','many'); txt('legExpl','');
     mn.innerHTML='📈 <b>Top volume — when the winning images were posted.</b> Brighter = more of this year’s most-reacted images happen to have been posted then. <span style="color:var(--muted)">On its own this mostly just reflects when <i>everyone</i> posts, so don’t read it as advice — switch to Lift for that.</span>';
