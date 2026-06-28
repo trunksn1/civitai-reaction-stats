@@ -242,17 +242,30 @@ function analyze(topImages, baselineRows) {
     const reactionsAsc = kept.map(i => i.reactions).sort((a, b) => a - b);
     const sum = reactionsAsc.reduce((s, v) => s + v, 0);
 
-    // Per-month breakdown (Jan..Dec): how many top images, and how strong they
-    // were. No "lift" here (the recent baseline can't speak to old months), so
-    // these are raw counts — the "data collected" view.
-    const monthCount = new Array(12).fill(0);
-    const monthReactions = Array.from({ length: 12 }, () => []);
-    for (const img of kept) {
-      const m = new Date(img.createdAt).getUTCMonth();
-      monthCount[m]++;
-      monthReactions[m].push(img.reactions);
-    }
-    const monthMedian = monthReactions.map(a => percentile(a.sort((x, y) => x - y), 50));
+    // Per-month breakdown (Jan..Dec). Counts + reaction stats for the charts,
+    // plus a per-month day×hour matrix and histogram so the viewer can drill
+    // into a single month (e.g. "May 2024"). Months with no data are omitted
+    // from the matrix/hist maps to keep the file small.
+    const byMonth = Array.from({ length: 12 }, () => []);
+    for (const img of kept) byMonth[new Date(img.createdAt).getUTCMonth()].push(img);
+
+    const monthCount = byMonth.map(a => a.length);
+    const monthMatrices = {};   // monthIndex -> 7x24
+    const monthHist = {};       // monthIndex -> histogram buckets
+    const monthStats = byMonth.map((imgs, m) => {
+      const rs = imgs.map(i => i.reactions).sort((a, b) => a - b);
+      if (imgs.length) {
+        monthMatrices[m] = bucketMatrix(imgs).matrix;
+        monthHist[m] = histogram(rs);
+      }
+      return {
+        count: imgs.length,
+        median: percentile(rs, 50),
+        p25: percentile(rs, 25),
+        p75: percentile(rs, 75),
+      };
+    });
+    const monthMedian = monthStats.map(s => s.median);
 
     years[year] = {
       count: kept.length,
@@ -262,10 +275,16 @@ function analyze(topImages, baselineRows) {
       counted: total,
       months: monthCount,
       monthMedian,
+      monthStats,
+      monthMatrices,
+      monthHist,
       histogram: histogram(reactionsAsc),
       reactions: {
         mean: kept.length ? Math.round(sum / kept.length) : 0,
+        p10: percentile(reactionsAsc, 10),
+        p25: percentile(reactionsAsc, 25),
         median: percentile(reactionsAsc, 50),
+        p75: percentile(reactionsAsc, 75),
         p90: percentile(reactionsAsc, 90),
         max: reactionsAsc[reactionsAsc.length - 1] || 0,
       },
@@ -314,21 +333,22 @@ function syntheticData() {
     return [6, 23];
   };
 
-  // Last month with data per year: 2026 is "the current, partial year" (data
-  // only through ~June), everyone else is a full year.
+  // Real-world month range per year: Civitai launched Nov 2022, and 2026 is the
+  // current partial year (data only through ~June). Everyone else is full.
+  const firstMonth = y => (y === 2022 ? 10 : 0);   // Nov 2022 launch
   const lastMonth = y => (y === 2026 ? 5 : 11);
-  // Pick a month with a gentle per-year seasonal wobble so the month charts
-  // aren't flat in the demo.
+  // Pick a month within that range, with a gentle per-year seasonal wobble so
+  // the month charts aren't flat in the demo.
   const pickMonth = y => {
-    const maxM = lastMonth(y);
+    const lo = firstMonth(y), hi = lastMonth(y);
     const cum = []; let acc = 0;
-    for (let m = 0; m <= maxM; m++) {
+    for (let m = lo; m <= hi; m++) {
       acc += Math.max(0.15, 1 + 0.6 * Math.sin((m / 12) * Math.PI * 2 + (y % 3)));
-      cum.push(acc);
+      cum.push([m, acc]);
     }
     const x = rand() * acc;
-    for (let m = 0; m < cum.length; m++) if (x <= cum[m]) return m;
-    return maxM;
+    for (const [m, c] of cum) if (x <= c) return m;
+    return hi;
   };
 
   const baselineRows = [];
@@ -341,9 +361,9 @@ function syntheticData() {
   const years = [2022, 2023, 2024, 2025, 2026];
   // Year "health": boom 2023-24, decline after — drives median reactions.
   const yearScale = { 2022: 0.6, 2023: 1.0, 2024: 1.3, 2025: 0.7, 2026: 0.4 };
-  // Generated volume: boom years overshoot the per-year cap (coverage "full"),
-  // the first/last years fall short of it ("partial") to exercise the flag.
-  const yearVolume = { 2022: 0.8, 2023: 1.5, 2024: 2.0, 2025: 1.2, 2026: 0.5 };
+  // Generated volume: 2022 is just the 2-month launch (small, "partial"); boom
+  // years overshoot the per-year cap ("full"); recent years taper off again.
+  const yearVolume = { 2022: 0.15, 2023: 1.4, 2024: 2.0, 2025: 1.1, 2026: 0.45 };
   for (const y of years) {
     const n = Math.round(PER_YEAR * yearVolume[y]);
     for (let i = 0; i < n; i++) {
