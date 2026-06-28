@@ -29,7 +29,7 @@
  *   CIVITAI_API_KEY     Bearer token (higher rate limits; not required)
  *   PER_YEAR            Top images to keep per calendar year (default 5000)
  *   MAX_PAGES           Max pages (×200) per nsfw level for the top pull (default 300)
- *   BASELINE_DAYS       Days of recent uploads to span for the baseline (default 9)
+ *   BASELINE_WEEKS      Whole weeks of recent uploads to span for the baseline (default 1)
  *   NSFW_LEVELS         Comma list: None,Soft,Mature,X (default all four)
  *   PAGE_DELAY_MS       Delay between pages (default 500)
  *   OUT                 Output path (default ./posting-analysis.json)
@@ -49,13 +49,14 @@ const PER_YEAR = intEnv('PER_YEAR', 5000);
 // fill most year buckets, and going deeper mostly just hammers the API (which
 // starts returning 503s). Raise it if quiet years come back "partial".
 const MAX_PAGES = intEnv('MAX_PAGES', 60);
-// The baseline must span a full week+ so every weekday is represented. Civitai's
-// upload volume is huge, so a fixed image count (the old BASELINE_TARGET) only
-// covered ~1 day — leaving the lift heatmap blank on whichever days the run
-// didn't happen to touch. Instead we page Newest until the timestamps cover
-// BASELINE_DAYS, capped at BASELINE_MAX_PAGES per nsfw level for safety.
-const BASELINE_DAYS = intEnv('BASELINE_DAYS', 9);
-const BASELINE_MAX_PAGES = intEnv('BASELINE_MAX_PAGES', 200);
+// The baseline must span a WHOLE number of weeks so every weekday is sampled
+// equally — a partial extra day would over-count those weekdays and bias their
+// lift. We page Newest until we've covered BASELINE_WEEKS*7 days, then trim any
+// overshoot back to an exact week boundary (see wholeWeekWindow). A fixed image
+// count (the old approach) only covered ~1 day of Civitai's firehose, leaving
+// the lift heatmap blank on the other weekdays.
+const BASELINE_WEEKS = intEnv('BASELINE_WEEKS', 1);
+const BASELINE_MAX_PAGES = intEnv('BASELINE_MAX_PAGES', 250);
 const PAGE_DELAY_MS = intEnv('PAGE_DELAY_MS', 800);
 const NSFW_LEVELS = (process.env.NSFW_LEVELS || 'None,Soft,Mature,X')
   .split(',').map(s => s.trim()).filter(Boolean);
@@ -166,15 +167,15 @@ async function collectTopImages() {
 
 async function collectBaseline() {
   // Most-recent uploads, reaction-agnostic, for the day/hour rhythm. We page
-  // back through time until the sample spans BASELINE_DAYS, so every weekday is
-  // covered (a fixed image count only covers ~1 day of Civitai's firehose).
+  // back through time until the sample spans BASELINE_WEEKS*7 days, so every
+  // weekday is covered (a fixed image count only covers ~1 day of the firehose).
   const byId = new Map();
-  const spanMs = BASELINE_DAYS * 86400 * 1000;
+  const spanMs = BASELINE_WEEKS * 7 * 86400 * 1000;
   for (const level of NSFW_LEVELS) {
     const nsfwParam = level === 'None' ? '' : `&nsfw=${encodeURIComponent(level)}`;
     const url = `${API_BASE}/images?limit=${PAGE_LIMIT}&sort=Newest&period=AllTime${nsfwParam}`;
     let kept = 0, newestTs = null, span = 0;
-    console.log(`\nBaseline pull — nsfw=${level} (paging back ~${BASELINE_DAYS} days)`);
+    console.log(`\nBaseline pull — nsfw=${level} (paging back ${BASELINE_WEEKS} week(s))`);
     try {
       await paginate(url, `base:${level}`, {
         maxPages: BASELINE_MAX_PAGES,
@@ -203,6 +204,22 @@ async function collectBaseline() {
 // ---------- analysis ----------
 function emptyMatrix() {
   return Array.from({ length: 7 }, () => new Array(24).fill(0));
+}
+
+// Trim baseline rows to the largest WHOLE number of weeks that fits the data,
+// ending at the newest timestamp. This removes the day-of-week skew that any
+// partial extra day would introduce (e.g. a 9-day span double-counts 2 days).
+function wholeWeekWindow(rows) {
+  const ts = rows.map(r => new Date(r.createdAt).getTime()).filter(Number.isFinite);
+  if (ts.length === 0) return { rows, weeks: 0 };
+  const max = Math.max(...ts), min = Math.min(...ts);
+  const weeks = Math.max(1, Math.floor((max - min) / (7 * 86400000)));
+  const cutoff = max - weeks * 7 * 86400000;
+  const kept = rows.filter(r => {
+    const t = new Date(r.createdAt).getTime();
+    return Number.isFinite(t) && t >= cutoff;
+  });
+  return { rows: kept, weeks };
 }
 
 // Bucket a list of {createdAt} into a 7x24 [day][hour] matrix (UTC).
@@ -305,15 +322,18 @@ function analyze(topImages, baselineRows) {
     };
   }
 
-  const base = bucketMatrix(baselineRows);
+  // Window the baseline to whole weeks so every weekday is sampled equally.
+  const { rows: baselineWindowed, weeks: baselineWeeks } = wholeWeekWindow(baselineRows);
+  const base = bucketMatrix(baselineWindowed);
+  console.log(`Baseline windowed to ${baselineWeeks} whole week(s): ${base.total} uploads (from ${baselineRows.length} collected)`);
 
   return {
     generatedAt: new Date().toISOString(),
     timezone: 'UTC',
     metric: 'likes+hearts+laughs+cries',
-    config: { PER_YEAR, MAX_PAGES, BASELINE_DAYS, NSFW_LEVELS },
+    config: { PER_YEAR, MAX_PAGES, BASELINE_WEEKS, NSFW_LEVELS },
     histLabels: HIST_LABELS,
-    baseline: { matrix: base.matrix, total: base.total },
+    baseline: { matrix: base.matrix, total: base.total, weeks: baselineWeeks },
     years,
   };
 }

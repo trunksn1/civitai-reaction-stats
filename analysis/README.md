@@ -38,7 +38,11 @@ The public Civitai API (`GET /api/v1/images`) has two constraints that shape eve
 
 1. **No calendar-year / date-range filter, and `period` is a *rolling* window** (`period=Year` = last 365 days, not "2023"). So to slice by calendar year we deep-paginate `sort=Most Reactions&period=AllTime` **once** and bucket every image by its `createdAt` year locally. Because we walk in reaction order, the first `PER_YEAR` images we see for any year *are* that year's most-reacted. Quiet years fill more slowly — raise `MAX_PAGES` to give them fuller coverage. The viewer's **Coverage** column shows `full` (hit the cap) vs `partial` (ran out of pages first).
 
-2. **A true per-year baseline is infeasible** (it would mean paginating millions of `Newest` images back through each year). Instead we page recent `Newest` uploads until they **span a full week+** (`BASELINE_DAYS`, default 9), giving the day-of-week / hour-of-day *rhythm*, and reuse that across all years. **This span matters:** Civitai's upload volume is huge, so a fixed *count* of recent images only covers ~1 day — which leaves the lift heatmap blank on every weekday the run didn't touch. Spanning by *days* guarantees all seven weekdays are represented. **Assumption:** the *shape* of when people upload (evenings, weekends, etc.) is roughly stable over time, even though total volume rose and fell.
+2. **A true per-year baseline is infeasible** (it would mean paginating millions of `Newest` images back through each year). Instead we page recent `Newest` uploads until they span a **whole number of weeks** (`BASELINE_WEEKS`, default 1), then trim any overshoot to an exact week boundary, giving the day-of-week / hour-of-day *rhythm*, reused across all years. **Two things matter here:**
+   - **Span by time, not count.** Civitai's upload volume is huge, so a fixed *count* of recent images only covers ~1 day — leaving the lift heatmap blank on every weekday the run didn't touch.
+   - **Whole weeks, not arbitrary days.** A 9-day window contains two weekdays *twice* and five *once*, so those two days get double-counted and their lift is biased downward. An exact multiple of 7 days samples every weekday equally. The analyzer trims the collected baseline to the largest whole week that fits (`wholeWeekWindow`).
+
+   **Assumption:** the *shape* of when people upload (evenings, weekends, etc.) is roughly stable over time, even though total volume rose and fell.
 
 All times are **UTC**. The viewer has a timezone-offset selector so you can shift the grid to a local audience.
 
@@ -61,8 +65,8 @@ All optional, via env vars:
 |-----|---------|---------|
 | `PER_YEAR` | `5000` | Top images kept per calendar year |
 | `MAX_PAGES` | `300` | Max pages (×200 imgs) per NSFW level for the top pull. Raise for fuller coverage of quiet years. |
-| `BASELINE_DAYS` | `9` | How many days of recent uploads the baseline must span (≥7 so every weekday is covered) |
-| `BASELINE_MAX_PAGES` | `200` | Per-nsfw-level page cap for the baseline pull (safety) |
+| `BASELINE_WEEKS` | `1` | Whole weeks of recent uploads the baseline spans (each weekday sampled equally; 2 averages out anomalies at ~2× cost) |
+| `BASELINE_MAX_PAGES` | `250` | Per-nsfw-level page cap for the baseline pull (safety) |
 | `NSFW_LEVELS` | `None,Soft,Mature,X` | Which content tiers to include (the API returns them separately) |
 | `PAGE_DELAY_MS` | `500` | Politeness delay between page requests |
 | `CIVITAI_API_KEY` | — | Optional bearer token; higher rate limits |
