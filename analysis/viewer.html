@@ -106,6 +106,7 @@
   <div id="demoBanner" style="display:none; background:#5c3a00; border:1px solid #d4a017; color:#ffe8b0; padding:11px 15px; border-radius:8px; margin-bottom:14px; font-size:13px">
     ⚠️ <strong>You're viewing built-in DEMO data</strong> — these numbers are synthetic, just to show the layout. To see your <strong>real</strong> Civitai data, click <strong>Choose File</strong> below and load your <code>posting-analysis.json</code>.
   </div>
+  <div id="qualityBanner" style="display:none; background:#5a1e1e; border:1px solid #e03131; color:#ffd0d0; padding:11px 15px; border-radius:8px; margin-bottom:14px; font-size:13px"></div>
   <div class="controls">
     <div><label>Data</label><input type="file" id="file" accept="application/json" /></div>
     <div><label>Year</label><select id="year"></select></div>
@@ -505,6 +506,11 @@ function loadFile(f){ const r=new FileReader(); r.onload=()=>{ try{ setData(JSON
 function setData(d, isDemo){ DATA=d; focusYM=null;
   document.getElementById('focusPanel').style.display='none';
   document.getElementById('demoBanner').style.display = isDemo ? '' : 'none';
+  // Warn if the baseline didn't span a full week (some weekdays under-covered).
+  const qb=document.getElementById('qualityBanner'); const bl=d&&d.baseline;
+  if(bl && (bl.weeks===0 || bl.weeks===undefined && bl.days!=null && bl.days<7)){
+    qb.style.display=''; qb.innerHTML=`⚠️ <strong>Baseline only spans ~${bl.days??'<7'} days</strong> (less than a full week), so the <strong>Lift</strong> heatmap is blank/unreliable on the under-covered weekdays. Re-run when Civitai's API is healthier (fewer 503s), or raise <code>BASELINE_MAX_PAGES</code>.`;
+  } else qb.style.display='none';
   populateYears(); render(); }
 
 populateTz();

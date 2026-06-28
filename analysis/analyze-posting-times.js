@@ -28,10 +28,11 @@
  * Env knobs (all optional):
  *   CIVITAI_API_KEY     Bearer token (higher rate limits; not required)
  *   PER_YEAR            Top images to keep per calendar year (default 5000)
- *   MAX_PAGES           Max pages (×200) per nsfw level for the top pull (default 300)
+ *   MAX_PAGES           Max pages (×200) per nsfw level for the top pull (default 60)
  *   BASELINE_WEEKS      Whole weeks of recent uploads to span for the baseline (default 1)
- *   NSFW_LEVELS         Comma list: None,Soft,Mature,X (default all four)
- *   PAGE_DELAY_MS       Delay between pages (default 500)
+ *   BASELINE_NSFW       Single nsfw level for the baseline stream (default None)
+ *   NSFW_LEVELS         Comma list for the TOP pull: None,Soft,Mature,X (default all four)
+ *   PAGE_DELAY_MS       Delay between pages (default 1000)
  *   OUT                 Output path (default ./posting-analysis.json)
  *   RAW_OUT             If set, also dump the raw collected images here
  */
@@ -56,8 +57,14 @@ const MAX_PAGES = intEnv('MAX_PAGES', 60);
 // count (the old approach) only covered ~1 day of Civitai's firehose, leaving
 // the lift heatmap blank on the other weekdays.
 const BASELINE_WEEKS = intEnv('BASELINE_WEEKS', 1);
-const BASELINE_MAX_PAGES = intEnv('BASELINE_MAX_PAGES', 250);
-const PAGE_DELAY_MS = intEnv('PAGE_DELAY_MS', 800);
+const BASELINE_MAX_PAGES = intEnv('BASELINE_MAX_PAGES', 400);
+// The baseline uses a SINGLE Newest stream (not one per nsfw level). Splitting
+// it by level made high-volume levels (Mature/X) dump ~1 recent day of images
+// that swamped the distribution toward that day, and quadrupled the API load
+// (→ 503s). One stream keeps every kept image on the same timeline. Default is
+// the standard feed ('None'); a representative proxy for the weekly rhythm.
+const BASELINE_NSFW = (process.env.BASELINE_NSFW || 'None').trim();
+const PAGE_DELAY_MS = intEnv('PAGE_DELAY_MS', 1000);
 const NSFW_LEVELS = (process.env.NSFW_LEVELS || 'None,Soft,Mature,X')
   .split(',').map(s => s.trim()).filter(Boolean);
 const OUT = process.env.OUT || join(__dirname, 'posting-analysis.json');
@@ -68,7 +75,7 @@ const RAW_OUT = process.env.RAW_OUT || join(__dirname, 'posting-raw.json');
 
 const API_BASE = 'https://civitai.com/api/v1';
 const PAGE_LIMIT = 200;
-const MAX_RETRIES = 6;
+const MAX_RETRIES = 8;
 
 // ---------- small utils ----------
 function intEnv(name, def) {
@@ -175,38 +182,38 @@ async function collectTopImages() {
 }
 
 async function collectBaseline() {
-  // Most-recent uploads, reaction-agnostic, for the day/hour rhythm. We page
-  // back through time until the sample spans BASELINE_WEEKS*7 days, so every
-  // weekday is covered (a fixed image count only covers ~1 day of the firehose).
+  // Reaction-agnostic upload rhythm from a SINGLE Newest stream. We page back
+  // until the timestamps span BASELINE_WEEKS*7 days. One stream (not one per
+  // nsfw level) is deliberate: every kept image stays on the same timeline, so
+  // a high-volume level can't dump one recent day and swamp the distribution,
+  // and it's ~4x less load on the API.
   const byId = new Map();
   const spanMs = BASELINE_WEEKS * 7 * 86400 * 1000;
-  for (const level of NSFW_LEVELS) {
-    const nsfwParam = level === 'None' ? '' : `&nsfw=${encodeURIComponent(level)}`;
-    const url = `${API_BASE}/images?limit=${PAGE_LIMIT}&sort=Newest&period=AllTime${nsfwParam}`;
-    let kept = 0, newestTs = null, span = 0;
-    console.log(`\nBaseline pull — nsfw=${level} (paging back ${BASELINE_WEEKS} week(s))`);
-    try {
-      await paginate(url, `base:${level}`, {
-        maxPages: BASELINE_MAX_PAGES,
-        shouldStop: () => span >= spanMs,
-        onItems: items => {
-          for (const it of items) {
-            if (!it?.createdAt) continue;
-            const t = new Date(it.createdAt).getTime();
-            if (!Number.isFinite(t)) continue;
-            if (newestTs === null) newestTs = t;
-            span = newestTs - t;                 // items arrive newest-first
-            if (byId.has(it.id)) continue;
-            byId.set(it.id, { createdAt: it.createdAt });
-            kept++;
-          }
-        },
-      });
-    } catch (err) {
-      console.log(`  ⚠️  [base:${level}] stopped early (${err.message}); keeping ${byId.size} baseline rows and continuing.`);
-    }
-    console.log(`  [base:${level}] spanned ${(span / 86400000).toFixed(1)} days, ${kept} kept`);
+  const nsfwParam = (!BASELINE_NSFW || BASELINE_NSFW === 'None') ? '' : `&nsfw=${encodeURIComponent(BASELINE_NSFW)}`;
+  const url = `${API_BASE}/images?limit=${PAGE_LIMIT}&sort=Newest&period=AllTime${nsfwParam}`;
+  let kept = 0, newestTs = null, span = 0;
+  console.log(`\nBaseline pull — single ${BASELINE_NSFW} stream (paging back ${BASELINE_WEEKS} week(s))`);
+  try {
+    await paginate(url, 'base', {
+      maxPages: BASELINE_MAX_PAGES,
+      shouldStop: () => span >= spanMs,
+      onItems: items => {
+        for (const it of items) {
+          if (!it?.createdAt) continue;
+          const t = new Date(it.createdAt).getTime();
+          if (!Number.isFinite(t)) continue;
+          if (newestTs === null) newestTs = t;
+          span = newestTs - t;                 // items arrive newest-first
+          if (byId.has(it.id)) continue;
+          byId.set(it.id, { createdAt: it.createdAt });
+          kept++;
+        }
+      },
+    });
+  } catch (err) {
+    console.log(`  ⚠️  [base] stopped early (${err.message}); keeping ${byId.size} baseline rows.`);
   }
+  console.log(`  [base] spanned ${(span / 86400000).toFixed(1)} days, ${kept} kept`);
   return Array.from(byId.values());
 }
 
@@ -216,19 +223,29 @@ function emptyMatrix() {
 }
 
 // Trim baseline rows to the largest WHOLE number of weeks that fits the data,
-// ending at the newest timestamp. This removes the day-of-week skew that any
-// partial extra day would introduce (e.g. a 9-day span double-counts 2 days).
+// ending at the newest timestamp. Whole weeks sample every weekday equally
+// (a partial extra day would double-count those weekdays). If the data spans
+// less than a week, we can't balance it — return weeks:0 so the caller can warn
+// that some weekdays are under-covered.
 function wholeWeekWindow(rows) {
-  const ts = rows.map(r => new Date(r.createdAt).getTime()).filter(Number.isFinite);
-  if (ts.length === 0) return { rows, weeks: 0 };
-  const max = Math.max(...ts), min = Math.min(...ts);
-  const weeks = Math.max(1, Math.floor((max - min) / (7 * 86400000)));
+  // Manual min/max — Math.max(...bigArray) overflows the stack past ~100k items.
+  let max = -Infinity, min = Infinity;
+  for (const r of rows) {
+    const t = new Date(r.createdAt).getTime();
+    if (!Number.isFinite(t)) continue;
+    if (t > max) max = t;
+    if (t < min) min = t;
+  }
+  if (!Number.isFinite(max)) return { rows, weeks: 0, days: 0 };
+  const days = (max - min) / 86400000;
+  if (days < 7) return { rows, weeks: 0, days };   // sub-week: can't balance
+  const weeks = Math.floor(days / 7);
   const cutoff = max - weeks * 7 * 86400000;
   const kept = rows.filter(r => {
     const t = new Date(r.createdAt).getTime();
     return Number.isFinite(t) && t >= cutoff;
   });
-  return { rows: kept, weeks };
+  return { rows: kept, weeks, days };
 }
 
 // Bucket a list of {createdAt} into a 7x24 [day][hour] matrix (UTC).
@@ -332,17 +349,24 @@ function analyze(topImages, baselineRows) {
   }
 
   // Window the baseline to whole weeks so every weekday is sampled equally.
-  const { rows: baselineWindowed, weeks: baselineWeeks } = wholeWeekWindow(baselineRows);
+  const { rows: baselineWindowed, weeks: baselineWeeks, days: baselineDays } = wholeWeekWindow(baselineRows);
   const base = bucketMatrix(baselineWindowed);
-  console.log(`Baseline windowed to ${baselineWeeks} whole week(s): ${base.total} uploads (from ${baselineRows.length} collected)`);
+  if (baselineWeeks >= 1) {
+    console.log(`Baseline windowed to ${baselineWeeks} whole week(s): ${base.total} uploads (balanced across weekdays)`);
+  } else {
+    console.log(`\n⚠️  Baseline spans only ${baselineDays.toFixed(1)} days (< 1 week). Some weekdays are`);
+    console.log(`    under-covered, so lift on those days will be blank or unreliable. This usually`);
+    console.log(`    means the API 503-ed before a full week was collected — re-run when it's healthier,`);
+    console.log(`    or raise BASELINE_MAX_PAGES / slow down with PAGE_DELAY_MS.`);
+  }
 
   return {
     generatedAt: new Date().toISOString(),
     timezone: 'UTC',
     metric: 'likes+hearts+laughs+cries',
-    config: { PER_YEAR, MAX_PAGES, BASELINE_WEEKS, NSFW_LEVELS },
+    config: { PER_YEAR, MAX_PAGES, BASELINE_WEEKS, BASELINE_NSFW, NSFW_LEVELS },
     histLabels: HIST_LABELS,
-    baseline: { matrix: base.matrix, total: base.total, weeks: baselineWeeks },
+    baseline: { matrix: base.matrix, total: base.total, weeks: baselineWeeks, days: Math.round(baselineDays * 10) / 10 },
     years,
   };
 }

@@ -41,6 +41,8 @@ The public Civitai API (`GET /api/v1/images`) has two constraints that shape eve
 2. **A true per-year baseline is infeasible** (it would mean paginating millions of `Newest` images back through each year). Instead we page recent `Newest` uploads until they span a **whole number of weeks** (`BASELINE_WEEKS`, default 1), then trim any overshoot to an exact week boundary, giving the day-of-week / hour-of-day *rhythm*, reused across all years. **Two things matter here:**
    - **Span by time, not count.** Civitai's upload volume is huge, so a fixed *count* of recent images only covers ~1 day — leaving the lift heatmap blank on every weekday the run didn't touch.
    - **Whole weeks, not arbitrary days.** A 9-day window contains two weekdays *twice* and five *once*, so those two days get double-counted and their lift is biased downward. An exact multiple of 7 days samples every weekday equally. The analyzer trims the collected baseline to the largest whole week that fits (`wholeWeekWindow`).
+   - **One stream, not one per nsfw level.** The baseline uses a single `Newest` stream (`BASELINE_NSFW`, default `None`). Splitting it by level made high-volume levels (Mature/X) dump ~1 recent day of images that *swamped* the distribution toward that day, and quadrupled the API load (→ 503s). One stream keeps every kept image on the same timeline.
+   - **If the API 503s before a full week is collected**, the analyzer reports the actual span and refuses to claim a balanced week; the viewer shows a red warning, and the lift heatmap will be blank on under-covered weekdays. Re-run when the API is healthier, or raise `BASELINE_MAX_PAGES`.
 
    **Assumption:** the *shape* of when people upload (evenings, weekends, etc.) is roughly stable over time, even though total volume rose and fell.
 
@@ -66,7 +68,8 @@ All optional, via env vars:
 | `PER_YEAR` | `5000` | Top images kept per calendar year |
 | `MAX_PAGES` | `300` | Max pages (×200 imgs) per NSFW level for the top pull. Raise for fuller coverage of quiet years. |
 | `BASELINE_WEEKS` | `1` | Whole weeks of recent uploads the baseline spans (each weekday sampled equally; 2 averages out anomalies at ~2× cost) |
-| `BASELINE_MAX_PAGES` | `250` | Per-nsfw-level page cap for the baseline pull (safety) |
+| `BASELINE_NSFW` | `None` | Single nsfw level used for the baseline stream |
+| `BASELINE_MAX_PAGES` | `400` | Page cap for the (single-stream) baseline pull (safety) |
 | `NSFW_LEVELS` | `None,Soft,Mature,X` | Which content tiers to include (the API returns them separately) |
 | `PAGE_DELAY_MS` | `500` | Politeness delay between page requests |
 | `CIVITAI_API_KEY` | — | Optional bearer token; higher rate limits |
