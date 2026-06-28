@@ -141,6 +141,8 @@ async function collectTopImages() {
     const nsfwParam = level === 'None' ? '' : `&nsfw=${encodeURIComponent(level)}`;
     const url = `${API_BASE}/images?limit=${PAGE_LIMIT}&sort=${encodeURIComponent('Most Reactions')}&period=AllTime${nsfwParam}`;
     console.log(`\nTop pull — nsfw=${level}`);
+    const before = byId.size;
+    let seen = 0, dupes = 0;
     // If the API gives up on this level (e.g. sustained 503s), keep everything
     // collected so far and move on — never throw the whole run's work away.
     try {
@@ -148,7 +150,9 @@ async function collectTopImages() {
         maxPages: MAX_PAGES,
         onItems: items => {
           for (const it of items) {
-            if (!it?.createdAt || byId.has(it.id)) continue;
+            if (!it?.createdAt) continue;
+            seen++;
+            if (byId.has(it.id)) { dupes++; continue; }
             byId.set(it.id, {
               id: it.id,
               createdAt: it.createdAt,
@@ -161,6 +165,11 @@ async function collectTopImages() {
     } catch (err) {
       console.log(`  ⚠️  [top:${level}] stopped early (${err.message}); keeping ${byId.size} images collected so far and continuing.`);
     }
+    // How much did this level actually add? If "new" is ~0, this nsfw level
+    // overlaps the previous ones (Civitai's nsfw filter is nested), and the
+    // extra requests bought nothing.
+    const added = byId.size - before;
+    console.log(`  [top:${level}] added ${added} NEW unique images (${dupes} of ${seen} already seen) → ${byId.size} unique total`);
   }
   return Array.from(byId.values());
 }
