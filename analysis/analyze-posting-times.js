@@ -54,7 +54,10 @@ const PAGE_DELAY_MS = intEnv('PAGE_DELAY_MS', 800);
 const NSFW_LEVELS = (process.env.NSFW_LEVELS || 'None,Soft,Mature,X')
   .split(',').map(s => s.trim()).filter(Boolean);
 const OUT = process.env.OUT || join(__dirname, 'posting-analysis.json');
-const RAW_OUT = process.env.RAW_OUT || '';
+// Slim raw dump of the collected data (just createdAt + reactions). Always
+// written on a live fetch so you can recompute any view later with
+// `--in posting-raw.json` — no second trip to the API.
+const RAW_OUT = process.env.RAW_OUT || join(__dirname, 'posting-raw.json');
 
 const API_BASE = 'https://civitai.com/api/v1';
 const PAGE_LIMIT = 200;
@@ -207,6 +210,20 @@ function percentile(sortedAsc, p) {
   return sortedAsc[idx];
 }
 
+// Reaction-count buckets for the "distribution of how big the top images were"
+// histogram. Last bucket is open-ended (10k+).
+const HIST_EDGES = [0, 100, 250, 500, 1000, 2500, 5000, 10000, Infinity];
+const HIST_LABELS = ['0–100', '100–250', '250–500', '500–1k', '1k–2.5k', '2.5k–5k', '5k–10k', '10k+'];
+function histogram(reactionsAsc) {
+  const h = new Array(HIST_LABELS.length).fill(0);
+  for (const r of reactionsAsc) {
+    for (let b = 0; b < HIST_LABELS.length; b++) {
+      if (r >= HIST_EDGES[b] && r < HIST_EDGES[b + 1]) { h[b]++; break; }
+    }
+  }
+  return h;
+}
+
 function analyze(topImages, baselineRows) {
   // Group top images by calendar year, keep top PER_YEAR by reactions.
   const byYear = new Map();
@@ -224,12 +241,28 @@ function analyze(topImages, baselineRows) {
     const { matrix, total } = bucketMatrix(kept);
     const reactionsAsc = kept.map(i => i.reactions).sort((a, b) => a - b);
     const sum = reactionsAsc.reduce((s, v) => s + v, 0);
+
+    // Per-month breakdown (Jan..Dec): how many top images, and how strong they
+    // were. No "lift" here (the recent baseline can't speak to old months), so
+    // these are raw counts — the "data collected" view.
+    const monthCount = new Array(12).fill(0);
+    const monthReactions = Array.from({ length: 12 }, () => []);
+    for (const img of kept) {
+      const m = new Date(img.createdAt).getUTCMonth();
+      monthCount[m]++;
+      monthReactions[m].push(img.reactions);
+    }
+    const monthMedian = monthReactions.map(a => percentile(a.sort((x, y) => x - y), 50));
+
     years[year] = {
       count: kept.length,
       collected: imgs.length,            // how many of this year we actually saw
       capped: imgs.length > PER_YEAR,    // true => we hit the PER_YEAR cap (good coverage)
       matrix,
       counted: total,
+      months: monthCount,
+      monthMedian,
+      histogram: histogram(reactionsAsc),
       reactions: {
         mean: kept.length ? Math.round(sum / kept.length) : 0,
         median: percentile(reactionsAsc, 50),
@@ -246,6 +279,7 @@ function analyze(topImages, baselineRows) {
     timezone: 'UTC',
     metric: 'likes+hearts+laughs+cries',
     config: { PER_YEAR, MAX_PAGES, BASELINE_TARGET, NSFW_LEVELS },
+    histLabels: HIST_LABELS,
     baseline: { matrix: base.matrix, total: base.total },
     years,
   };
@@ -280,10 +314,27 @@ function syntheticData() {
     return [6, 23];
   };
 
+  // Last month with data per year: 2026 is "the current, partial year" (data
+  // only through ~June), everyone else is a full year.
+  const lastMonth = y => (y === 2026 ? 5 : 11);
+  // Pick a month with a gentle per-year seasonal wobble so the month charts
+  // aren't flat in the demo.
+  const pickMonth = y => {
+    const maxM = lastMonth(y);
+    const cum = []; let acc = 0;
+    for (let m = 0; m <= maxM; m++) {
+      acc += Math.max(0.15, 1 + 0.6 * Math.sin((m / 12) * Math.PI * 2 + (y % 3)));
+      cum.push(acc);
+    }
+    const x = rand() * acc;
+    for (let m = 0; m < cum.length; m++) if (x <= cum[m]) return m;
+    return maxM;
+  };
+
   const baselineRows = [];
   for (let i = 0; i < 20000; i++) {
     const [d, h] = sampleCell(baseWeight);
-    baselineRows.push({ createdAt: synthDate(2025, d, h, rand) });
+    baselineRows.push({ createdAt: synthDate(2025, Math.floor(rand() * 12), d, h, rand) });
   }
 
   const topImages = [];
@@ -298,20 +349,21 @@ function syntheticData() {
     for (let i = 0; i < n; i++) {
       const [d, h] = sampleCell((dd, hh) => baseWeight(dd, hh) * advantage(dd, hh));
       const reactions = Math.round((200 + rand() * 4000) * yearScale[y]);
-      topImages.push({ id: `${y}-${i}`, createdAt: synthDate(y, d, h, rand), reactions, stats: {} });
+      topImages.push({ id: `${y}-${i}`, createdAt: synthDate(y, pickMonth(y), d, h, rand), reactions, stats: {} });
     }
   }
   return { topImages, baselineRows };
 }
-function synthDate(year, day, hour, rand) {
-  // Place into the right year with the requested UTC day-of-week & hour.
-  const base = new Date(Date.UTC(year, 0, 1));
-  const firstDow = base.getUTCDay();
-  let offset = (day - firstDow + 7) % 7;
-  offset += Math.floor(rand() * 50) * 7; // spread across the year, same weekday
-  const dt = new Date(Date.UTC(year, 0, 1 + offset, hour, Math.floor(rand() * 60)));
-  if (dt.getUTCFullYear() !== year) dt.setUTCFullYear(year);
-  return dt.toISOString();
+// Build an ISO date in the given year+month whose UTC weekday is `day`, at `hour`.
+function synthDate(year, month, day, hour, rand) {
+  const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  const matching = [];
+  for (let dd = 1; dd <= daysInMonth; dd++) {
+    if (new Date(Date.UTC(year, month, dd)).getUTCDay() === day) matching.push(dd);
+  }
+  const dd = matching.length ? matching[Math.floor(rand() * matching.length)]
+                             : 1 + Math.floor(rand() * daysInMonth);
+  return new Date(Date.UTC(year, month, dd, hour, Math.floor(rand() * 60))).toISOString();
 }
 function mulberry32(a) {
   return function () {
@@ -345,8 +397,13 @@ async function main() {
     baselineRows = await collectBaseline();
     console.log(`\nCollected ${topImages.length} unique top images, ${baselineRows.length} baseline rows.`);
     if (RAW_OUT) {
-      writeFileSync(RAW_OUT, JSON.stringify({ topImages, baselineRows }));
-      console.log(`Raw dump written to ${RAW_OUT}`);
+      // Slim it down: all any view needs is when + how popular.
+      const slim = {
+        topImages: topImages.map(i => ({ createdAt: i.createdAt, reactions: i.reactions })),
+        baselineRows: baselineRows.map(b => ({ createdAt: b.createdAt })),
+      };
+      writeFileSync(RAW_OUT, JSON.stringify(slim));
+      console.log(`Raw data saved to ${RAW_OUT} (recompute views later with: node analyze-posting-times.js --in posting-raw.json)`);
     }
   }
 

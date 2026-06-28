@@ -74,8 +74,26 @@ All optional, via env vars:
 
 ## Files
 
-- `analyze-posting-times.js` — collector + analyzer. `--sample` (synthetic, no network), `--in <raw.json>` (re-analyze a dump), or no args (live fetch).
-- `viewer.html` — self-contained viewer (no external libraries/CDN). Heatmap + year selector + lift/volume/baseline modes + timezone shift + year-over-year table. Ships with embedded synthetic data so it renders on first open; load real data via the file picker or drag-drop, or serve the folder over http so it auto-loads `posting-analysis.json`.
+- `analyze-posting-times.js` — collector + analyzer. `--sample` (synthetic, no network), `--in <raw.json>` (re-analyze a saved dump — instant, no API), or no args (live fetch).
+- `viewer.html` — self-contained viewer (no external libraries/CDN), with two tabs:
+  - **⏰ When to post** — the day×hour heatmap (lift / top-volume / baseline modes), plus best-hour-of-day and best-day-of-week lift bar charts, a "best slot" summary, year selector and timezone shift.
+  - **📊 The data (years & months)** — a month-by-month timeline across all years (the boom/decline, by count or median reactions), the selected year's per-month breakdown, a reaction-size distribution histogram, and the year-over-year table.
+
+  Ships with embedded synthetic data so it renders on first open; load real data via the file picker or drag-drop, or serve the folder over http so it auto-loads `posting-analysis.json`.
+
+### Re-running vs. recomputing
+
+A live fetch always writes **two** files:
+- `posting-analysis.json` — the computed views (what the viewer loads).
+- `posting-raw.json` — the slim raw data (just `createdAt` + reaction count per image).
+
+If you later want a different view or tweak, you do **not** need to hit the API again — recompute instantly from the raw dump:
+
+```bash
+node analyze-posting-times.js --in posting-raw.json
+```
+
+(Changing `PER_YEAR` etc. and re-running `--in` recomputes from whatever was already collected.)
 
 ## Caveats worth remembering
 

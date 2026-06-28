@@ -19,4 +19,5 @@ PLAN.md
 # Generated analysis output (viewer.html ships an embedded sample; real runs
 # write these locally and are loaded via the file picker / http)
 analysis/posting-analysis.json
+analysis/posting-raw.json
 analysis/*-raw.json
