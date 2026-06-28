@@ -1,0 +1,1483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Civitai — Best Time to Post</title>
+<style>
+  :root {
+    --bg: #1a1b1e; --panel: #25262b; --border: #373a40; --text: #e9ecef;
+    --muted: #909296; --accent: #4dabf7;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+  header { padding: 18px 24px; border-bottom: 1px solid var(--border); }
+  h1 { margin: 0 0 4px; font-size: 20px; }
+  .sub { color: var(--muted); font-size: 13px; }
+  .wrap { padding: 20px 24px; max-width: 1100px; margin: 0 auto; }
+  .controls { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin-bottom: 18px; }
+  .controls label { color: var(--muted); margin-right: 6px; }
+  select, button, input[type=file]::file-selector-button {
+    background: var(--panel); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 7px 10px; font: inherit; cursor: pointer;
+  }
+  button:hover, select:hover { border-color: var(--accent); }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; border-right: 1px solid var(--border); }
+  .seg button:last-child { border-right: 0; }
+  .seg button.active { background: var(--accent); color: #06243d; font-weight: 600; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px; margin-bottom: 18px; }
+  .heat { display: grid; grid-template-columns: 42px repeat(24, 1fr); gap: 2px; }
+  .heat .cell { aspect-ratio: 1 / 1; border-radius: 3px; position: relative; }
+  .heat .hd { color: var(--muted); font-size: 10px; text-align: center; align-self: end; }
+  .heat .rh { color: var(--muted); font-size: 11px; display: flex; align-items: center; justify-content: flex-end; padding-right: 6px; }
+  .cell[data-v]:hover { outline: 2px solid #fff; z-index: 2; }
+  .legend { display: flex; align-items: center; gap: 10px; margin-top: 14px; color: var(--muted); font-size: 12px; }
+  .legend .bar { height: 12px; width: 220px; border-radius: 3px; }
+  .tip { position: fixed; pointer-events: none; background: #000; color: #fff; padding: 6px 8px;
+         border-radius: 6px; font-size: 12px; opacity: 0; transition: opacity .08s; z-index: 10; white-space: nowrap; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; }
+  .best { display: flex; gap: 16px; flex-wrap: wrap; }
+  .best .card { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; min-width: 150px; }
+  .best .card .k { color: var(--muted); font-size: 12px; }
+  .best .card .v { font-size: 18px; font-weight: 600; margin-top: 2px; }
+  .note { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  code { background: #000; padding: 1px 5px; border-radius: 4px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Civitai — Best Time to Post</h1>
+  <div class="sub">When the most-reacted images were posted, vs. when everything is posted (UTC).</div>
+</header>
+
+<div class="wrap">
+  <div class="controls">
+    <div><label>Data</label><input type="file" id="file" accept="application/json" /></div>
+    <div><label>Year</label><select id="year"></select></div>
+    <div>
+      <label>Show</label>
+      <span class="seg" id="mode">
+        <button data-mode="lift" class="active">Lift vs. baseline</button>
+        <button data-mode="top">Top volume</button>
+        <button data-mode="base">Baseline</button>
+      </span>
+    </div>
+    <div><label>TZ offset</label>
+      <select id="tz"></select>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div id="best" class="best"></div>
+  </div>
+
+  <div class="panel">
+    <div id="heat" class="heat"></div>
+    <div class="legend">
+      <span id="legLo">low</span>
+      <div class="bar" id="legBar"></div>
+      <span id="legHi">high</span>
+      <span id="legExpl" style="margin-left:auto"></span>
+    </div>
+    <div class="note" id="modeNote"></div>
+  </div>
+
+  <div class="panel">
+    <h3 style="margin:0 0 10px">Year-over-year</h3>
+    <table id="yearTable"></table>
+    <div class="note">“Median reactions” is the median of each year’s top images — a rough proxy for how strong the top tier was that year. Year coverage marked <em>partial</em> means the pull didn’t reach the per-year cap (raise <code>MAX_PAGES</code>).</div>
+  </div>
+
+  <div class="note">
+    Metric: <span id="metric"></span>. Generated: <span id="gen"></span>.
+    Lift = (top images’ share of a cell) ÷ (baseline share of that cell). &gt;1 means that day/hour over-performs relative to how much gets posted then.
+    Load your own <code>posting-analysis.json</code> above, or drag it onto the window.
+  </div>
+</div>
+
+<div class="tip" id="tip"></div>
+
+<script>
+const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+let DATA = null, mode = 'lift', tzOffset = 0;
+
+// ---- color scales ----
+function liftColor(v) {
+  // diverging around 1.0: blue (<1) -> grey (1) -> red (>1)
+  if (v == null || !isFinite(v)) return '#2b2d31';
+  const x = Math.max(-1, Math.min(1, Math.log2(v) / 1.5)); // log2 lift, clamp ±1.5 stops
+  if (x < 0) { const t = -x; return mix([54,58,64],[51,154,240], t); }
+  return mix([54,58,64],[250,82,82], x);
+}
+function seqColor(t) { // 0..1 -> dark -> accent
+  return mix([26,27,30],[77,171,247], Math.max(0, Math.min(1, t)));
+}
+function mix(a, b, t) {
+  const c = a.map((v,i)=>Math.round(v+(b[i]-v)*t));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
+// shift a [day][hour] UTC matrix by tzOffset hours
+function shiftMatrix(m, off) {
+  const out = Array.from({length:7},()=>new Array(24).fill(0));
+  for (let d=0; d<7; d++) for (let h=0; h<24; h++) {
+    let nh = h + off, nd = d;
+    while (nh < 0) { nh += 24; nd = (nd+6)%7; }
+    while (nh >= 24) { nh -= 24; nd = (nd+1)%7; }
+    out[nd][nh] += m[d][h];
+  }
+  return out;
+}
+const sum = m => m.flat().reduce((s,v)=>s+v,0);
+
+function cellValues(year) {
+  const top = shiftMatrix(DATA.years[year].matrix, tzOffset);
+  const base = shiftMatrix(DATA.baseline.matrix, tzOffset);
+  const tT = sum(top) || 1, bT = sum(base) || 1;
+  const vals = Array.from({length:7},()=>new Array(24).fill(null));
+  for (let d=0; d<7; d++) for (let h=0; h<24; h++) {
+    if (mode === 'top') vals[d][h] = top[d][h];
+    else if (mode === 'base') vals[d][h] = base[d][h];
+    else {
+      const bs = base[d][h]/bT;
+      vals[d][h] = bs > 0 ? (top[d][h]/tT)/bs : null;
+    }
+  }
+  return { vals, top, base, tT, bT };
+}
+
+function render() {
+  if (!DATA) return;
+  const year = document.getElementById('year').value;
+  const { vals, top, base } = cellValues(year);
+
+  // heatmap
+  const heat = document.getElementById('heat');
+  heat.innerHTML = '';
+  heat.appendChild(el('div','hd',''));
+  for (let h=0; h<24; h++) heat.appendChild(el('div','hd', h%3===0? String(h):''));
+  const flat = vals.flat().filter(v=>v!=null && isFinite(v));
+  const maxSeq = Math.max(1, ...flat);
+  for (let d=0; d<7; d++) {
+    heat.appendChild(el('div','rh', DAYS[d]));
+    for (let h=0; h<24; h++) {
+      const v = vals[d][h];
+      const cell = el('div','cell','');
+      cell.dataset.v = v==null? '' : v;
+      cell.style.background = mode==='lift' ? liftColor(v) : seqColor((v||0)/maxSeq);
+      cell.addEventListener('mousemove', e => showTip(e, d, h, v, top[d][h], base[d][h]));
+      cell.addEventListener('mouseleave', hideTip);
+      heat.appendChild(cell);
+    }
+  }
+
+  // legend + note
+  const legBar = document.getElementById('legBar');
+  if (mode==='lift') {
+    legBar.style.background = 'linear-gradient(90deg,'+liftColor(0.33)+','+liftColor(1)+','+liftColor(3)+')';
+    document.getElementById('legLo').textContent = '0.5× (under)';
+    document.getElementById('legHi').textContent = '2× (over)';
+    document.getElementById('legExpl').textContent = 'red = over-performs, blue = under-performs';
+    document.getElementById('modeNote').textContent = 'Each cell = how much that day/hour over- or under-performs relative to how much content is posted then. This is the honest "best time" signal.';
+  } else {
+    legBar.style.background = 'linear-gradient(90deg,'+seqColor(0)+','+seqColor(1)+')';
+    document.getElementById('legLo').textContent = 'few';
+    document.getElementById('legHi').textContent = 'many';
+    document.getElementById('legExpl').textContent = '';
+    document.getElementById('modeNote').textContent = mode==='top'
+      ? 'Raw count of top images posted in each cell — dominated by overall posting volume, not necessarily advantage.'
+      : 'Raw count of all sampled uploads — this is the baseline volume the lift view divides by.';
+  }
+
+  renderBest(year, vals);
+  renderYearTable();
+  document.getElementById('metric').textContent = DATA.metric || '';
+  document.getElementById('gen').textContent = DATA.generatedAt || '';
+}
+
+function renderBest(year, vals) {
+  // best by lift (or volume) cell, best day, best hour
+  const best = document.getElementById('best');
+  const y = DATA.years[year];
+  let bestCell = {v:-Infinity}, byHour = new Array(24).fill(0), byDay = new Array(7).fill(0), wHour=new Array(24).fill(0), wDay=new Array(7).fill(0);
+  for (let d=0; d<7; d++) for (let h=0; h<24; h++) {
+    const v = vals[d][h];
+    if (v!=null && isFinite(v) && v>bestCell.v) bestCell = {v,d,h};
+    if (v!=null && isFinite(v)) { byHour[h]+=v; wHour[h]++; byDay[d]+=v; wDay[d]++; }
+  }
+  const avg = (arr,w)=>arr.map((s,i)=>w[i]?s/w[i]:0);
+  const ah = avg(byHour,wHour), ad = avg(byDay,wDay);
+  const bh = ah.indexOf(Math.max(...ah)), bd = ad.indexOf(Math.max(...ad));
+  const unit = mode==='lift' ? '×' : '';
+  const fmt = v => mode==='lift' ? v.toFixed(2)+unit : Math.round(v);
+  best.innerHTML = '';
+  best.appendChild(card('Best slot', bestCell.v===-Infinity?'—':`${DAYS[bestCell.d]} ${hourLabel(bestCell.h)} (${fmt(bestCell.v)})`));
+  best.appendChild(card('Best hour', `${hourLabel(bh)} (${fmt(ah[bh])})`));
+  best.appendChild(card('Best day', `${DAYS[bd]} (${fmt(ad[bd])})`));
+  best.appendChild(card('Top images', `${y.count.toLocaleString()}`));
+  best.appendChild(card('Median reactions', `${(y.reactions?.median||0).toLocaleString()}`));
+}
+
+function renderYearTable() {
+  const t = document.getElementById('yearTable');
+  const rows = Object.entries(DATA.years);
+  t.innerHTML = '<tr><th>Year</th><th>Top imgs</th><th>Median</th><th>Mean</th><th>P90</th><th>Coverage</th></tr>' +
+    rows.map(([y,i])=>`<tr><td>${y}</td><td>${i.count.toLocaleString()}</td>`+
+      `<td>${(i.reactions?.median||0).toLocaleString()}</td>`+
+      `<td>${(i.reactions?.mean||0).toLocaleString()}</td>`+
+      `<td>${(i.reactions?.p90||0).toLocaleString()}</td>`+
+      `<td>${i.capped?'full':'partial'}</td></tr>`).join('');
+}
+
+// ---- helpers ----
+function el(tag, cls, txt){ const e=document.createElement(tag); if(cls)e.className=cls; if(txt!=null)e.textContent=txt; return e; }
+function card(k,v){ const c=el('div','card'); c.appendChild(el('div','k',k)); c.appendChild(el('div','v',v)); return c; }
+function hourLabel(h){ return String(h).padStart(2,'0')+':00'; }
+const tip = document.getElementById('tip');
+function showTip(e,d,h,v,t,b){
+  tip.style.opacity=1; tip.style.left=(e.clientX+12)+'px'; tip.style.top=(e.clientY+12)+'px';
+  const lift = v==null?'n/a':(mode==='lift'? v.toFixed(2)+'×' : Math.round(v));
+  tip.innerHTML = `${DAYS[d]} ${hourLabel(h)}<br>${mode==='lift'?'lift '+lift:'count '+lift}<br><span style="color:#aaa">top:${t} · base:${b}</span>`;
+}
+function hideTip(){ tip.style.opacity=0; }
+
+function populateYears(){
+  const sel = document.getElementById('year'); sel.innerHTML='';
+  Object.keys(DATA.years).sort().forEach(y=>{ const o=el('option',null,y); o.value=y; sel.appendChild(o); });
+  sel.value = Object.keys(DATA.years).sort().slice(-1)[0]; // default latest
+}
+function populateTz(){
+  const sel = document.getElementById('tz');
+  for (let o=-12;o<=14;o++){ const opt=el('option',null,(o>=0?'+':'')+o+'h'); opt.value=o; if(o===0)opt.textContent='UTC ±0h'; sel.appendChild(opt); }
+  sel.value='0';
+}
+
+// ---- wiring ----
+document.getElementById('mode').addEventListener('click', e=>{
+  const b = e.target.closest('button'); if(!b) return;
+  mode = b.dataset.mode;
+  [...document.querySelectorAll('#mode button')].forEach(x=>x.classList.toggle('active', x===b));
+  render();
+});
+document.getElementById('year').addEventListener('change', render);
+document.getElementById('tz').addEventListener('change', e=>{ tzOffset=parseInt(e.target.value,10)||0; render(); });
+document.getElementById('file').addEventListener('change', e=>{
+  const f=e.target.files[0]; if(!f) return; loadFile(f);
+});
+window.addEventListener('dragover', e=>e.preventDefault());
+window.addEventListener('drop', e=>{ e.preventDefault(); const f=e.dataTransfer.files[0]; if(f) loadFile(f); });
+function loadFile(f){ const r=new FileReader(); r.onload=()=>{ try{ setData(JSON.parse(r.result)); }catch(err){ alert('Bad JSON: '+err.message); } }; r.readAsText(f); }
+function setData(d){ DATA=d; populateYears(); render(); }
+
+populateTz();
+// Bootstrap is invoked by the embedded-sample script below, AFTER EMBEDDED_SAMPLE
+// is defined (avoids a load-order race on file://). Over http(s) we prefer a real
+// sibling posting-analysis.json and only fall back to the embedded sample.
+window.__bootstrap = function () {
+  const embedded = (typeof EMBEDDED_SAMPLE !== 'undefined') ? EMBEDDED_SAMPLE : null;
+  if (location.protocol === 'http:' || location.protocol === 'https:') {
+    fetch('posting-analysis.json').then(r=>r.ok?r.json():Promise.reject()).then(setData)
+      .catch(()=>{ if (embedded) setData(embedded); });
+  } else if (embedded) {
+    setData(embedded);
+  }
+};
+</script>
+<script id="embedded-sample">
+// Synthetic sample so the viewer renders on first open. Replace by loading real data.
+var EMBEDDED_SAMPLE = {
+  "generatedAt": "2026-06-28T05:52:38.616Z",
+  "timezone": "UTC",
+  "metric": "likes+hearts+laughs+cries",
+  "config": {
+    "PER_YEAR": 5000,
+    "MAX_PAGES": 300,
+    "BASELINE_TARGET": 20000,
+    "NSFW_LEVELS": [
+      "None",
+      "Soft",
+      "Mature",
+      "X"
+    ]
+  },
+  "baseline": {
+    "matrix": [
+      [
+        74,
+        87,
+        96,
+        111,
+        108,
+        90,
+        90,
+        75,
+        58,
+        60,
+        56,
+        68,
+        82,
+        128,
+        134,
+        181,
+        201,
+        212,
+        233,
+        237,
+        241,
+        203,
+        216,
+        181
+      ],
+      [
+        65,
+        91,
+        90,
+        97,
+        86,
+        84,
+        62,
+        53,
+        42,
+        57,
+        50,
+        51,
+        63,
+        67,
+        118,
+        136,
+        163,
+        174,
+        208,
+        212,
+        207,
+        188,
+        158,
+        121
+      ],
+      [
+        80,
+        72,
+        82,
+        76,
+        75,
+        89,
+        67,
+        52,
+        51,
+        44,
+        49,
+        62,
+        66,
+        100,
+        116,
+        165,
+        172,
+        182,
+        199,
+        222,
+        190,
+        176,
+        149,
+        151
+      ],
+      [
+        76,
+        66,
+        81,
+        92,
+        88,
+        88,
+        63,
+        59,
+        63,
+        56,
+        41,
+        60,
+        74,
+        100,
+        112,
+        151,
+        163,
+        165,
+        215,
+        205,
+        224,
+        204,
+        163,
+        139
+      ],
+      [
+        71,
+        68,
+        81,
+        95,
+        73,
+        79,
+        54,
+        72,
+        50,
+        54,
+        42,
+        67,
+        77,
+        94,
+        112,
+        143,
+        167,
+        170,
+        220,
+        200,
+        194,
+        176,
+        184,
+        143
+      ],
+      [
+        60,
+        78,
+        76,
+        90,
+        108,
+        87,
+        77,
+        57,
+        45,
+        42,
+        36,
+        56,
+        81,
+        90,
+        112,
+        118,
+        150,
+        193,
+        190,
+        183,
+        187,
+        203,
+        166,
+        148
+      ],
+      [
+        86,
+        87,
+        106,
+        89,
+        118,
+        102,
+        93,
+        80,
+        73,
+        67,
+        55,
+        82,
+        85,
+        124,
+        141,
+        180,
+        219,
+        234,
+        255,
+        244,
+        227,
+        231,
+        206,
+        197
+      ]
+    ],
+    "total": 20000
+  },
+  "years": {
+    "2022": {
+      "count": 4000,
+      "collected": 4000,
+      "capped": false,
+      "matrix": [
+        [
+          15,
+          19,
+          16,
+          12,
+          20,
+          15,
+          16,
+          14,
+          18,
+          11,
+          10,
+          17,
+          19,
+          23,
+          29,
+          40,
+          38,
+          53,
+          44,
+          49,
+          50,
+          38,
+          40,
+          31
+        ],
+        [
+          13,
+          17,
+          24,
+          16,
+          11,
+          14,
+          11,
+          12,
+          9,
+          11,
+          8,
+          9,
+          14,
+          10,
+          20,
+          29,
+          26,
+          36,
+          38,
+          42,
+          42,
+          33,
+          35,
+          26
+        ],
+        [
+          13,
+          12,
+          25,
+          13,
+          13,
+          10,
+          12,
+          6,
+          11,
+          9,
+          9,
+          12,
+          11,
+          18,
+          41,
+          51,
+          54,
+          70,
+          31,
+          41,
+          42,
+          29,
+          27,
+          28
+        ],
+        [
+          12,
+          17,
+          11,
+          15,
+          11,
+          17,
+          8,
+          9,
+          17,
+          10,
+          10,
+          18,
+          8,
+          19,
+          35,
+          45,
+          44,
+          52,
+          26,
+          43,
+          39,
+          41,
+          32,
+          23
+        ],
+        [
+          10,
+          21,
+          21,
+          18,
+          19,
+          16,
+          8,
+          13,
+          7,
+          5,
+          5,
+          13,
+          16,
+          18,
+          37,
+          24,
+          66,
+          61,
+          40,
+          34,
+          35,
+          31,
+          26,
+          16
+        ],
+        [
+          18,
+          10,
+          17,
+          21,
+          16,
+          16,
+          11,
+          7,
+          10,
+          11,
+          18,
+          14,
+          17,
+          15,
+          25,
+          30,
+          31,
+          26,
+          35,
+          39,
+          37,
+          35,
+          37,
+          21
+        ],
+        [
+          20,
+          23,
+          21,
+          26,
+          14,
+          25,
+          11,
+          13,
+          13,
+          13,
+          21,
+          14,
+          10,
+          25,
+          32,
+          19,
+          36,
+          35,
+          49,
+          54,
+          46,
+          44,
+          39,
+          27
+        ]
+      ],
+      "counted": 4000,
+      "reactions": {
+        "mean": 1314,
+        "median": 1308,
+        "p90": 2263,
+        "max": 2519
+      }
+    },
+    "2023": {
+      "count": 5000,
+      "collected": 7500,
+      "capped": true,
+      "matrix": [
+        [
+          22,
+          27,
+          24,
+          26,
+          26,
+          28,
+          18,
+          16,
+          9,
+          13,
+          15,
+          5,
+          19,
+          27,
+          27,
+          38,
+          53,
+          61,
+          54,
+          60,
+          54,
+          39,
+          44,
+          35
+        ],
+        [
+          22,
+          23,
+          14,
+          16,
+          15,
+          29,
+          16,
+          14,
+          15,
+          16,
+          9,
+          14,
+          20,
+          13,
+          22,
+          39,
+          59,
+          23,
+          63,
+          51,
+          51,
+          52,
+          41,
+          29
+        ],
+        [
+          12,
+          14,
+          18,
+          25,
+          24,
+          30,
+          20,
+          10,
+          9,
+          9,
+          17,
+          9,
+          14,
+          17,
+          56,
+          52,
+          61,
+          67,
+          39,
+          37,
+          53,
+          47,
+          47,
+          45
+        ],
+        [
+          13,
+          12,
+          21,
+          24,
+          29,
+          17,
+          19,
+          18,
+          16,
+          16,
+          11,
+          9,
+          14,
+          16,
+          35,
+          61,
+          58,
+          96,
+          40,
+          62,
+          54,
+          47,
+          43,
+          20
+        ],
+        [
+          17,
+          12,
+          19,
+          25,
+          14,
+          26,
+          12,
+          19,
+          8,
+          9,
+          8,
+          9,
+          15,
+          13,
+          54,
+          63,
+          74,
+          62,
+          63,
+          37,
+          49,
+          40,
+          30,
+          31
+        ],
+        [
+          11,
+          18,
+          18,
+          18,
+          24,
+          22,
+          16,
+          14,
+          13,
+          11,
+          14,
+          19,
+          16,
+          22,
+          24,
+          37,
+          47,
+          31,
+          31,
+          59,
+          56,
+          44,
+          37,
+          37
+        ],
+        [
+          14,
+          20,
+          35,
+          28,
+          30,
+          27,
+          15,
+          16,
+          16,
+          9,
+          14,
+          8,
+          21,
+          22,
+          40,
+          52,
+          43,
+          52,
+          51,
+          64,
+          50,
+          46,
+          58,
+          32
+        ]
+      ],
+      "counted": 5000,
+      "reactions": {
+        "mean": 2880,
+        "median": 2888,
+        "p90": 3945,
+        "max": 4200
+      }
+    },
+    "2024": {
+      "count": 5000,
+      "collected": 10000,
+      "capped": true,
+      "matrix": [
+        [
+          25,
+          16,
+          28,
+          23,
+          31,
+          24,
+          24,
+          24,
+          19,
+          6,
+          15,
+          11,
+          18,
+          20,
+          27,
+          43,
+          52,
+          52,
+          61,
+          50,
+          49,
+          69,
+          52,
+          43
+        ],
+        [
+          14,
+          15,
+          22,
+          18,
+          16,
+          17,
+          19,
+          17,
+          13,
+          12,
+          10,
+          17,
+          16,
+          25,
+          25,
+          32,
+          37,
+          49,
+          46,
+          40,
+          36,
+          35,
+          33,
+          40
+        ],
+        [
+          12,
+          20,
+          19,
+          28,
+          14,
+          14,
+          16,
+          8,
+          14,
+          13,
+          13,
+          11,
+          9,
+          13,
+          51,
+          50,
+          85,
+          82,
+          57,
+          48,
+          43,
+          33,
+          34,
+          34
+        ],
+        [
+          19,
+          30,
+          17,
+          12,
+          21,
+          15,
+          15,
+          17,
+          13,
+          10,
+          11,
+          16,
+          22,
+          15,
+          39,
+          65,
+          63,
+          55,
+          47,
+          35,
+          48,
+          54,
+          36,
+          34
+        ],
+        [
+          18,
+          20,
+          17,
+          16,
+          21,
+          20,
+          15,
+          16,
+          13,
+          10,
+          16,
+          21,
+          13,
+          19,
+          58,
+          51,
+          65,
+          81,
+          45,
+          54,
+          36,
+          34,
+          40,
+          29
+        ],
+        [
+          17,
+          33,
+          24,
+          20,
+          30,
+          24,
+          25,
+          16,
+          18,
+          15,
+          14,
+          8,
+          7,
+          26,
+          27,
+          28,
+          40,
+          41,
+          52,
+          47,
+          43,
+          38,
+          34,
+          32
+        ],
+        [
+          19,
+          24,
+          34,
+          22,
+          23,
+          21,
+          23,
+          15,
+          19,
+          18,
+          9,
+          18,
+          20,
+          24,
+          28,
+          36,
+          48,
+          53,
+          73,
+          60,
+          56,
+          60,
+          48,
+          46
+        ]
+      ],
+      "counted": 5000,
+      "reactions": {
+        "mean": 4174,
+        "median": 4159,
+        "p90": 5207,
+        "max": 5460
+      }
+    },
+    "2025": {
+      "count": 5000,
+      "collected": 6000,
+      "capped": true,
+      "matrix": [
+        [
+          13,
+          20,
+          20,
+          22,
+          34,
+          25,
+          10,
+          16,
+          12,
+          16,
+          14,
+          18,
+          12,
+          21,
+          34,
+          28,
+          44,
+          55,
+          44,
+          44,
+          58,
+          61,
+          59,
+          32
+        ],
+        [
+          12,
+          24,
+          14,
+          23,
+          14,
+          19,
+          22,
+          12,
+          13,
+          5,
+          10,
+          12,
+          22,
+          25,
+          22,
+          32,
+          46,
+          42,
+          53,
+          46,
+          50,
+          44,
+          45,
+          37
+        ],
+        [
+          19,
+          15,
+          16,
+          30,
+          20,
+          16,
+          16,
+          9,
+          7,
+          16,
+          15,
+          13,
+          21,
+          20,
+          53,
+          60,
+          70,
+          55,
+          42,
+          56,
+          49,
+          40,
+          40,
+          33
+        ],
+        [
+          17,
+          25,
+          20,
+          20,
+          19,
+          22,
+          21,
+          15,
+          12,
+          16,
+          13,
+          10,
+          13,
+          20,
+          56,
+          59,
+          74,
+          84,
+          52,
+          43,
+          49,
+          46,
+          44,
+          34
+        ],
+        [
+          14,
+          18,
+          17,
+          17,
+          23,
+          14,
+          16,
+          12,
+          11,
+          7,
+          17,
+          14,
+          20,
+          23,
+          52,
+          59,
+          74,
+          78,
+          73,
+          44,
+          36,
+          36,
+          37,
+          31
+        ],
+        [
+          22,
+          25,
+          21,
+          24,
+          15,
+          17,
+          16,
+          17,
+          15,
+          12,
+          6,
+          15,
+          24,
+          20,
+          27,
+          44,
+          30,
+          46,
+          50,
+          51,
+          48,
+          46,
+          37,
+          29
+        ],
+        [
+          15,
+          19,
+          27,
+          28,
+          22,
+          21,
+          10,
+          15,
+          20,
+          14,
+          12,
+          11,
+          16,
+          17,
+          26,
+          34,
+          49,
+          49,
+          54,
+          60,
+          59,
+          57,
+          55,
+          39
+        ]
+      ],
+      "counted": 5000,
+      "reactions": {
+        "mean": 1782,
+        "median": 1780,
+        "p90": 2720,
+        "max": 2940
+      }
+    },
+    "2026": {
+      "count": 2500,
+      "collected": 2500,
+      "capped": false,
+      "matrix": [
+        [
+          11,
+          13,
+          16,
+          12,
+          16,
+          7,
+          14,
+          5,
+          5,
+          8,
+          3,
+          7,
+          4,
+          15,
+          15,
+          28,
+          18,
+          28,
+          30,
+          32,
+          25,
+          17,
+          19,
+          22
+        ],
+        [
+          4,
+          9,
+          10,
+          5,
+          11,
+          8,
+          8,
+          7,
+          7,
+          6,
+          4,
+          5,
+          12,
+          8,
+          11,
+          13,
+          16,
+          21,
+          18,
+          23,
+          28,
+          20,
+          18,
+          23
+        ],
+        [
+          7,
+          3,
+          12,
+          9,
+          6,
+          12,
+          3,
+          7,
+          4,
+          8,
+          11,
+          5,
+          5,
+          8,
+          24,
+          30,
+          34,
+          40,
+          27,
+          26,
+          23,
+          17,
+          23,
+          21
+        ],
+        [
+          6,
+          12,
+          9,
+          12,
+          9,
+          10,
+          3,
+          11,
+          6,
+          4,
+          9,
+          5,
+          12,
+          6,
+          22,
+          28,
+          43,
+          48,
+          17,
+          21,
+          16,
+          21,
+          28,
+          6
+        ],
+        [
+          5,
+          2,
+          9,
+          8,
+          17,
+          9,
+          7,
+          5,
+          10,
+          7,
+          7,
+          7,
+          12,
+          15,
+          25,
+          26,
+          31,
+          40,
+          16,
+          23,
+          19,
+          27,
+          22,
+          18
+        ],
+        [
+          6,
+          12,
+          13,
+          11,
+          13,
+          4,
+          8,
+          5,
+          4,
+          2,
+          4,
+          8,
+          6,
+          7,
+          15,
+          19,
+          23,
+          19,
+          24,
+          19,
+          19,
+          17,
+          18,
+          16
+        ],
+        [
+          17,
+          11,
+          9,
+          14,
+          13,
+          14,
+          11,
+          14,
+          16,
+          8,
+          8,
+          8,
+          10,
+          11,
+          19,
+          27,
+          27,
+          24,
+          34,
+          35,
+          33,
+          30,
+          30,
+          24
+        ]
+      ],
+      "counted": 2500,
+      "reactions": {
+        "mean": 880,
+        "median": 884,
+        "p90": 1529,
+        "max": 1680
+      }
+    }
+  }
+};
+window.__bootstrap && window.__bootstrap();
+</script>
+</body>
+</html>
