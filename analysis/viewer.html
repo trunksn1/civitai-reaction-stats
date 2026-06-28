@@ -80,6 +80,9 @@
   th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); }
   th { color: var(--muted); font-weight: 600; }
   .note { color: var(--muted); font-size: 12px; margin-top: 10px; }
+  .modeinfo { background: var(--bg); border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0;
+    padding: 10px 14px; margin: 0 0 14px; font-size: 13px; color: #cdd1d6; }
+  .modeinfo b { color: var(--text); }
   code { background: #000; padding: 1px 5px; border-radius: 4px; }
   .tip { position: fixed; pointer-events: none; background: #000; color: #fff; padding: 6px 8px;
     border-radius: 6px; font-size: 12px; opacity: 0; transition: opacity .08s; z-index: 10; white-space: nowrap; }
@@ -133,12 +136,12 @@
           <button data-mode="base">Baseline</button>
         </span>
       </h3>
+      <div class="modeinfo" id="modeNote"></div>
       <div id="heat" class="heat"></div>
       <div class="legend">
         <span id="legLo">low</span><div class="bar" id="legBar"></div><span id="legHi">high</span>
         <span id="legExpl" style="margin-left:auto"></span>
       </div>
-      <div class="note" id="modeNote"></div>
     </div>
 
     <div class="row2">
@@ -316,7 +319,9 @@ function drawHeatmap(el, topM, baseM, hmode){
       const v=vals[d][h], n=top[d][h]; const cell=dom('div','cell','');
       cell.dataset.v=v==null?'':v;
       cell.style.background = hmode==='lift'?liftColor(v):seqColor((v||0)/maxSeq);
-      if(hmode==='lift') cell.style.opacity = String(Math.max(.12,Math.min(1, n/minConf)));
+      // Fade low-sample cells, but never below 0.35 so "few images" still reads
+      // as a dim cell, not an empty one. Cells with zero images stay blank.
+      if(hmode==='lift' && v!=null) cell.style.opacity = String(Math.max(.35,Math.min(1, n/minConf)));
       cell.addEventListener('mousemove',e=>tipHeat(e,d,h,v,n,base[d][h],hmode));
       cell.addEventListener('mouseleave',hideTip);
       el.appendChild(cell);
@@ -353,12 +358,16 @@ function renderWhen(year){
   drawHeatmap(document.getElementById('heat'), DATA.years[year].matrix, DATA.baseline.matrix, mode);
   // legend
   const legBar=document.getElementById('legBar');
+  const mn=document.getElementById('modeNote');
   if(mode==='lift'){ legBar.style.background='linear-gradient(90deg,'+liftColor(0.33)+','+liftColor(1)+','+liftColor(3)+')';
     txt('legLo','0.5× under'); txt('legHi','2× over'); txt('legExpl','red over-performs · blue under · faded = few images');
-    txt('modeNote','Each cell: how much that day/hour over- or under-performs vs. how much is posted then. Faded cells have too few images to trust — adjust with the Confidence selector.');
+    mn.innerHTML='🎯 <b>Lift vs. baseline — this is the actual answer.</b> Each square asks: do images posted at this day+hour do <b>better than you’d expect</b>? <b style="color:var(--red)">Red</b> = yes, posting then tends to over-perform; <b style="color:var(--blue)">blue</b> = worse than average. It works by dividing “when the winners were posted” by “when everything is posted”, so it isn’t fooled by simply-busy hours. <span style="color:var(--muted)">Faded squares have too few images to trust — tune with the Confidence selector.</span>';
+  } else if(mode==='top'){ legBar.style.background='linear-gradient(90deg,'+seqColor(0)+','+seqColor(1)+')';
+    txt('legLo','few'); txt('legHi','many'); txt('legExpl','');
+    mn.innerHTML='📈 <b>Top volume — when the winning images were posted.</b> Brighter = more of this year’s most-reacted images happen to have been posted then. <span style="color:var(--muted)">On its own this mostly just reflects when <i>everyone</i> posts, so don’t read it as advice — switch to Lift for that.</span>';
   } else { legBar.style.background='linear-gradient(90deg,'+seqColor(0)+','+seqColor(1)+')';
     txt('legLo','few'); txt('legHi','many'); txt('legExpl','');
-    txt('modeNote', mode==='top'?'Raw count of top images per cell — dominated by posting volume.':'Raw count of all sampled uploads — the baseline the lift view divides by.'); }
+    mn.innerHTML='🌐 <b>Baseline — when people post in general.</b> Brighter = more uploads at that day+hour, popular or not. This is the reference the Lift view divides by. <span style="color:var(--muted)">If this looks blank on weekdays, the baseline pull didn’t span a full week — re-run with a larger <code>BASELINE_DAYS</code>.</span>'; }
   // marginals
   const {hourLift,dayLift}=marginals(year);
   drawBars(document.getElementById('hourChart'),document.getElementById('hourLabels'),

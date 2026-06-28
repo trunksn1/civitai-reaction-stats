@@ -29,7 +29,7 @@
  *   CIVITAI_API_KEY     Bearer token (higher rate limits; not required)
  *   PER_YEAR            Top images to keep per calendar year (default 5000)
  *   MAX_PAGES           Max pages (×200) per nsfw level for the top pull (default 300)
- *   BASELINE_TARGET     Recent uploads to sample for the baseline (default 20000)
+ *   BASELINE_DAYS       Days of recent uploads to span for the baseline (default 9)
  *   NSFW_LEVELS         Comma list: None,Soft,Mature,X (default all four)
  *   PAGE_DELAY_MS       Delay between pages (default 500)
  *   OUT                 Output path (default ./posting-analysis.json)
@@ -49,7 +49,13 @@ const PER_YEAR = intEnv('PER_YEAR', 5000);
 // fill most year buckets, and going deeper mostly just hammers the API (which
 // starts returning 503s). Raise it if quiet years come back "partial".
 const MAX_PAGES = intEnv('MAX_PAGES', 60);
-const BASELINE_TARGET = intEnv('BASELINE_TARGET', 20000);
+// The baseline must span a full week+ so every weekday is represented. Civitai's
+// upload volume is huge, so a fixed image count (the old BASELINE_TARGET) only
+// covered ~1 day — leaving the lift heatmap blank on whichever days the run
+// didn't happen to touch. Instead we page Newest until the timestamps cover
+// BASELINE_DAYS, capped at BASELINE_MAX_PAGES per nsfw level for safety.
+const BASELINE_DAYS = intEnv('BASELINE_DAYS', 9);
+const BASELINE_MAX_PAGES = intEnv('BASELINE_MAX_PAGES', 200);
 const PAGE_DELAY_MS = intEnv('PAGE_DELAY_MS', 800);
 const NSFW_LEVELS = (process.env.NSFW_LEVELS || 'None,Soft,Mature,X')
   .split(',').map(s => s.trim()).filter(Boolean);
@@ -159,21 +165,28 @@ async function collectTopImages() {
 }
 
 async function collectBaseline() {
-  // Most-recent uploads, reaction-agnostic, for the day/hour rhythm.
+  // Most-recent uploads, reaction-agnostic, for the day/hour rhythm. We page
+  // back through time until the sample spans BASELINE_DAYS, so every weekday is
+  // covered (a fixed image count only covers ~1 day of Civitai's firehose).
   const byId = new Map();
-  const perLevel = Math.ceil(BASELINE_TARGET / NSFW_LEVELS.length);
+  const spanMs = BASELINE_DAYS * 86400 * 1000;
   for (const level of NSFW_LEVELS) {
     const nsfwParam = level === 'None' ? '' : `&nsfw=${encodeURIComponent(level)}`;
     const url = `${API_BASE}/images?limit=${PAGE_LIMIT}&sort=Newest&period=AllTime${nsfwParam}`;
-    let kept = 0;
-    console.log(`\nBaseline pull — nsfw=${level} (target ${perLevel})`);
+    let kept = 0, newestTs = null, span = 0;
+    console.log(`\nBaseline pull — nsfw=${level} (paging back ~${BASELINE_DAYS} days)`);
     try {
       await paginate(url, `base:${level}`, {
-        maxPages: Math.ceil(perLevel / PAGE_LIMIT) + 2,
-        shouldStop: () => kept >= perLevel,
+        maxPages: BASELINE_MAX_PAGES,
+        shouldStop: () => span >= spanMs,
         onItems: items => {
           for (const it of items) {
-            if (!it?.createdAt || byId.has(it.id)) continue;
+            if (!it?.createdAt) continue;
+            const t = new Date(it.createdAt).getTime();
+            if (!Number.isFinite(t)) continue;
+            if (newestTs === null) newestTs = t;
+            span = newestTs - t;                 // items arrive newest-first
+            if (byId.has(it.id)) continue;
             byId.set(it.id, { createdAt: it.createdAt });
             kept++;
           }
@@ -182,6 +195,7 @@ async function collectBaseline() {
     } catch (err) {
       console.log(`  ⚠️  [base:${level}] stopped early (${err.message}); keeping ${byId.size} baseline rows and continuing.`);
     }
+    console.log(`  [base:${level}] spanned ${(span / 86400000).toFixed(1)} days, ${kept} kept`);
   }
   return Array.from(byId.values());
 }
@@ -297,7 +311,7 @@ function analyze(topImages, baselineRows) {
     generatedAt: new Date().toISOString(),
     timezone: 'UTC',
     metric: 'likes+hearts+laughs+cries',
-    config: { PER_YEAR, MAX_PAGES, BASELINE_TARGET, NSFW_LEVELS },
+    config: { PER_YEAR, MAX_PAGES, BASELINE_DAYS, NSFW_LEVELS },
     histLabels: HIST_LABELS,
     baseline: { matrix: base.matrix, total: base.total },
     years,
