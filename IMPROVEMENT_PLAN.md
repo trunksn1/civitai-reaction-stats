@@ -45,8 +45,8 @@ All in `scripts/fetch-stats.js` unless noted.
 
 | # | Task | Detail | Size |
 |---|------|--------|------|
-| 3.1 | Incremental discovery | Pass known image IDs (from existing gist data) into `fetchUserImagesFromHost`; stop paginating a level when a full page contains only known IDs. Force full sweep when tier ≠ daily or `FULL_DISCOVERY=true`. | M |
-| 3.2 | Discovery telemetry | Log pages fetched per level/host before vs after (validates 3.1). | S |
+| 3.1 | ✅ Incremental discovery | Pass known image IDs (from existing gist data) into `fetchUserImagesFromHost`; stop paginating a level when a full page contains only known IDs. Force full sweep when tier ≠ daily or `FULL_DISCOVERY=true`. | M |
+| 3.2 | ✅ Discovery telemetry | Log pages fetched per level/host before vs after (validates 3.1). | S |
 | 3.3 | (Optional) positional snapshot arrays | `[t, dl, dh, dla, dc, dco, dbu, dcol, dvi]` in stored JSON via the codec. Only if gist size is still a concern after 1.4; requires codec versioning (`formatVersion` field, read both). | L |
 
 ## Phase 4 — Chart correctness (extension)

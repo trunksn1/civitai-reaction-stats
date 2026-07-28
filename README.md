@@ -216,6 +216,18 @@ The system uses a **smart tiered refresh strategy** to balance data freshness wi
 including those at 0. Images older than 30 days that are still at 0 refresh on the
 monthly tier (they used to be re-fetched every hour forever).
 
+### Incremental discovery
+
+Hourly (daily-tier) runs use **incremental discovery**: since results are sorted
+newest-first, pagination stops at the first page made entirely of already-known images —
+new uploads are still found immediately, but the run no longer re-downloads the full
+gallery listing (4 NSFW levels × 2 hosts) every hour. Images beyond the stop point are
+carried from stored data, and their stat freshness comes from the tiered per-image
+refresh as always. Monthly/quarterly runs (and the first run ever) still sweep every
+page — those full sweeps are also the only runs that mark disappeared images as
+`frozen`. To force a full sweep on demand, set the `FULL_DISCOVERY=true` env var (or
+just dispatch the workflow with the `monthly` or `quarterly` tier).
+
 ### Why Tiered Refresh?
 
 **Problem:** The Civitai bulk API returns **stale/cached stats** that can be hours or days old.

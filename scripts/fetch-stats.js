@@ -27,6 +27,9 @@ const REFRESH_TIER_OVERRIDE = process.env.REFRESH_TIER; // Optional: 'auto', 'da
 const RESET_IMAGE_IDS = new Set(
   (process.env.RESET_IMAGE_IDS || '').split(',').map(s => s.trim()).filter(Boolean)
 );
+// Force a full discovery sweep (all pages, all NSFW levels, both hosts) on a
+// daily-tier run. Monthly/quarterly tiers and first runs always sweep fully.
+const FULL_DISCOVERY = (process.env.FULL_DISCOVERY || '').toLowerCase() === 'true';
 
 // Validate required environment variables
 if (!GIST_ID || !GIST_TOKEN || !CIVITAI_USERNAME) {
@@ -189,8 +192,7 @@ function getRefreshTier() {
  * The Civitai bulk API returns stale stats, so we re-fetch individually
  * on a smart schedule to keep stats fresh without excessive API calls.
  */
-async function refreshImageStats(images) {
-  const tier = getRefreshTier();
+async function refreshImageStats(images, tier) {
   const now = new Date();
   const thirtyDaysAgo = new Date(now - 30 * 24 * 60 * 60 * 1000);
   const sixMonthsAgo = new Date(now - 180 * 24 * 60 * 60 * 1000);
@@ -272,6 +274,11 @@ async function refreshImageStats(images) {
         const newTotal = (mergedStats.likeCount || 0) + (mergedStats.heartCount || 0) +
                          (mergedStats.laughCount || 0) + (mergedStats.cryCount || 0);
         batch[j].stats = mergedStats;
+        // A successful individual refresh counts as "seen this run", even if
+        // bulk discovery skipped this image (incremental mode).
+        if (batch[j]._synthesized) {
+          delete batch[j]._synthesized;
+        }
         if (newTotal !== oldTotal) {
           updated++;
         } else {
@@ -304,7 +311,7 @@ async function refreshImageStats(images) {
 /**
  * Fetch all pages from a paginated API URL
  */
-async function fetchAllPages(startUrl, label) {
+async function fetchAllPages(startUrl, label, stopAtKnownIds = null) {
   const allItems = [];
   let nextPage = startUrl;
   let pageCount = 0;
@@ -318,6 +325,13 @@ async function fetchAllPages(startUrl, label) {
     if (data.items && data.items.length > 0) {
       allItems.push(...data.items);
       console.log(`    Retrieved ${data.items.length} images (total: ${allItems.length})`);
+
+      // Incremental discovery: results are sorted Newest-first, so once an
+      // entire page is already-known images, all later pages are known too.
+      if (stopAtKnownIds && data.items.every(item => stopAtKnownIds.has(String(item.id)))) {
+        console.log(`    [${label}] Page ${pageCount} contains only known images — stopping early`);
+        break;
+      }
     }
 
     nextPage = data.metadata?.nextPage || null;
@@ -361,7 +375,7 @@ function mergeDiscoveredImage(a, b) {
  * Fetch all of a user's images from a single host, paginating each NSFW level.
  * Tags each returned image with its host ('com' | 'red').
  */
-async function fetchUserImagesFromHost(username, host) {
+async function fetchUserImagesFromHost(username, host, stopAtKnownIds = null) {
   const baseUrl = `${apiBaseForHost(host)}/images?username=${encodeURIComponent(username)}&limit=${IMAGES_PER_PAGE}&sort=Newest&period=AllTime`;
 
   const nsfwLevels = [
@@ -373,7 +387,7 @@ async function fetchUserImagesFromHost(username, host) {
 
   const results = [];
   for (const { param, label } of nsfwLevels) {
-    const images = await fetchAllPages(`${baseUrl}${param}`, `${host}:${label}`);
+    const images = await fetchAllPages(`${baseUrl}${param}`, `${host}:${label}`, stopAtKnownIds);
     results.push({ label, count: images.length, images });
   }
 
@@ -391,18 +405,30 @@ async function fetchUserImagesFromHost(username, host) {
   return Array.from(imageMap.values());
 }
 
-async function fetchAllUserImages(username) {
+async function fetchAllUserImages(username, existingImages = []) {
   console.log(`Fetching images for user: ${username}`);
 
+  // Incremental discovery: plain hourly (daily-tier) runs only need to find
+  // NEW image IDs — each paginated stream stops at the first page made
+  // entirely of known images. Known images that pagination doesn't reach are
+  // synthesized from stored data below; their stat freshness comes from the
+  // tiered per-image refresh, not from discovery. Full sweeps (monthly and
+  // quarterly tiers, first run, or FULL_DISCOVERY=true) paginate everything
+  // and are the only runs that can mark images stale.
+  const tier = getRefreshTier();
+  const fullSweep = tier !== 'daily' || FULL_DISCOVERY || existingImages.length === 0;
+  const knownIds = fullSweep ? null : new Set(existingImages.map(img => String(img.id)));
+  console.log(`Discovery mode: ${fullSweep ? 'full sweep' : `incremental (${knownIds.size} known images)`}`);
+
   // .com discovery is required.
-  const comImages = await fetchUserImagesFromHost(username, 'com');
+  const comImages = await fetchUserImagesFromHost(username, 'com', knownIds);
 
   // .red discovery (R-and-harder content moved here). Best-effort: a failure
   // must not abort the whole run, otherwise a .red outage would lose .com data.
   let redImages = [];
   if (CIVITAI_RED_ENABLED) {
     try {
-      redImages = await fetchUserImagesFromHost(username, 'red');
+      redImages = await fetchUserImagesFromHost(username, 'red', knownIds);
     } catch (err) {
       console.log(`\n⚠️  civitai.red discovery failed (continuing with .com only): ${err.message}`);
     }
@@ -416,6 +442,40 @@ async function fetchAllUserImages(username) {
     const existing = imageMap.get(img.id);
     imageMap.set(img.id, existing ? mergeDiscoveredImage(existing, img) : img);
   }
+
+  // Synthesize known images that incremental discovery didn't reach, so they
+  // keep flowing into totals and are not misclassified as missing/stale.
+  if (!fullSweep) {
+    let synthesized = 0;
+    for (const existing of existingImages) {
+      if (imageMap.has(Number(existing.id)) || imageMap.has(existing.id)) continue;
+      if (!existing.snapshots || existing.snapshots.length === 0) continue;
+      const last = resolveSnapshot(existing.snapshots, existing.snapshots.length - 1);
+      imageMap.set(existing.id, {
+        id: existing.id,
+        createdAt: existing.createdAt,
+        url: existing.thumbnailUrl, // API field img.url = image file (becomes thumbnailUrl)
+        meta: { prompt: existing.name },
+        host: existing.host || 'com',
+        stats: {
+          likeCount: last.likes,
+          heartCount: last.hearts,
+          laughCount: last.laughs,
+          cryCount: last.cries,
+          commentCount: last.comments,
+          buzzCount: last.buzz,
+          collectCount: last.collects,
+          viewCount: last.views
+        },
+        _synthesized: true
+      });
+      synthesized++;
+    }
+    if (synthesized > 0) {
+      console.log(`Synthesized ${synthesized} known images not reached by incremental discovery`);
+    }
+  }
+
   const allImages = Array.from(imageMap.values());
 
   console.log(`\nCombined hosts: ${comImages.length} com + ${redImages.length} red = ${allImages.length} unique images`);
@@ -444,7 +504,7 @@ async function fetchAllUserImages(username) {
   console.log(`\nBulk fetch stats: ${hasStatsCount} with reactions, ${zeroStatsCount} with 0 reactions`);
 
   // Re-fetch accurate stats using tiered schedule
-  const imagesWithStats = await refreshImageStats(publishedImages);
+  const imagesWithStats = await refreshImageStats(publishedImages, tier);
 
   console.log(`\nTotal published images: ${imagesWithStats.length}`);
   return imagesWithStats;
@@ -785,8 +845,10 @@ function processImages(apiImages, existingImages = []) {
       thumbnailUrl: img.url,
       createdAt: img.createdAt,
       host,
-      lastSeenAt: timestamp,
-      stale: false,
+      // Synthesized entries (incremental discovery didn't reach them) were not
+      // actually seen by the API this run: keep their lastSeenAt and stale flag.
+      lastSeenAt: img._synthesized ? (existingImage?.lastSeenAt || null) : timestamp,
+      stale: img._synthesized ? (existingImage?.stale || false) : false,
       snapshots
     };
   });
@@ -869,16 +931,17 @@ async function main() {
   console.log('');
 
   try {
+    // Read existing Gist data FIRST: fail fast on gist problems before touching
+    // the Civitai API, and feed known image IDs into incremental discovery.
+    const existingData = await readGistData();
+
     // Fetch all user images from Civitai
-    const apiImages = await fetchAllUserImages(CIVITAI_USERNAME);
+    const apiImages = await fetchAllUserImages(CIVITAI_USERNAME, existingData.images);
 
     if (apiImages.length === 0) {
       console.log('No images found for user. Exiting.');
       return;
     }
-
-    // Read existing Gist data
-    const existingData = await readGistData();
 
     // Log the data we read for debugging
     if (existingData.totalSnapshots.length === 0 && existingData.images.length === 0) {
