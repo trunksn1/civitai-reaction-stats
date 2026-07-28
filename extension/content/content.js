@@ -216,8 +216,9 @@ function setupObserver() {
  * Initialize the content script
  */
 function init() {
-  // Only run on civitai.com
-  if (!window.location.hostname.includes('civitai.com')) {
+  // Only run on civitai.com / civitai.red
+  if (!window.location.hostname.includes('civitai.com') &&
+      !window.location.hostname.includes('civitai.red')) {
     return;
   }
 

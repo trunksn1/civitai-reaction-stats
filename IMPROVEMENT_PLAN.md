@@ -56,7 +56,7 @@ All in `scripts/fetch-stats.js` unless noted.
 | 4.1 | Time-scale x-axis | Bundle `chartjs-adapter-date-fns` (or luxon) into `extension/lib/`; switch overview + per-image charts to `scales.x.type: 'time'` with raw timestamps as `{x, y}` points. Verify "All" view no longer compresses months into the same width as days. | M |
 | 4.2 | Fixed-interval delta buckets | Replace per-snapshot `computeDeltas` for bar charts with calendar bucketing (reuse/generalize `dailyActivity`): 1d → hourly buckets, 7d → 6h, 30d/90d → daily. Bars become comparable. | M |
 | 4.3 | Stacked delta bars | In delta mode, render likes/hearts/laughs/cries as a stacked bar (stack = total); drop the separate "Total" series there. Keep "Total" as a line only in cumulative mode, default-off. | M |
-| 4.4 | `civitai.red` support in extension | Add `https://civitai.red/*` to `host_permissions` + `content_scripts.matches` so the Stats menu also appears there. | S |
+| 4.4 | ✅ `civitai.red` support in extension | Add `https://civitai.red/*` to `host_permissions` + `content_scripts.matches` so the Stats menu also appears there. | S |
 | 4.5 | Stepped-line cumulative mode | Render cumulative lines with `stepped: 'before'` so sparse change-only snapshots don't draw invented slopes across silent gaps. Add a log-scale toggle for the "All" range. | S |
 | 4.6 | Declutter series defaults | Cumulative mode defaults to Total + likes + hearts visible; laughs/cries/buzz/collects opt-in. In stacked delta mode (4.3) hide the redundant Total series. | S |
 | 4.7 | Card sparklines | Always-visible total-reactions sparkline (no axes) on each image card and inside each summary tile; the full multi-series chart stays behind the expand. | M |
