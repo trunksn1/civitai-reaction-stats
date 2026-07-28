@@ -325,11 +325,14 @@ function renderStats() {
   // Render images
   renderImages(document.getElementById('sortSelect').value);
 
-  // The Trends chart is rendered lazily when its tab is activated (a canvas
-  // sized while hidden renders at 0 height). Render now only if already active.
+  // The Trends chart and Images timeline are rendered lazily when their tab is
+  // activated (a canvas sized while hidden renders at 0 height). Render now
+  // only if the tab is already active.
   if (currentTab === 'trends') {
     renderChart();
     renderPeriodSummary();
+  } else if (currentTab === 'images') {
+    renderImagesTimeline();
   }
 }
 
@@ -351,6 +354,8 @@ function switchTab(tab) {
   if (tab === 'trends' && statsData) {
     renderChart();
     renderPeriodSummary();
+  } else if (tab === 'images' && statsData) {
+    renderImagesTimeline();
   } else if (tab === 'overview' && overviewActivityChart) {
     overviewActivityChart.resize();
   }
@@ -788,18 +793,22 @@ function renderChart() {
   }
 
   const chartType = getEffectiveChartType(currentTimeRange, currentChartType);
-  const deltaMode = isDeltaMode(currentTimeRange);
+  const isArea = chartType === 'area';
+  // Area mode (the AoE2 timeline) is always cumulative stacked, whatever the range.
+  const deltaMode = !isArea && isDeltaMode(currentTimeRange);
   const data = getChartData();
   const stacked = !!data.stacked;
   // Cumulative lines run on a true time axis (linear ms) so uneven snapshot
   // spacing renders honestly; bars use evenly-spaced category buckets.
-  const timeAxis = !deltaMode && chartType === 'line';
-  const logY = !deltaMode && useLogScale;
+  const timeAxis = !deltaMode && (chartType === 'line' || isArea);
+  const logY = !deltaMode && useLogScale && !isArea;
 
   // Update chart title
   const titleEl = document.getElementById('chartTitle');
   if (titleEl) {
-    titleEl.textContent = deltaMode ? 'Reactions Gained' : 'Reactions Over Time';
+    titleEl.textContent = deltaMode
+      ? 'Reactions Gained'
+      : (isArea ? 'Reactions Over Time — stacked' : 'Reactions Over Time');
   }
 
   const xScale = timeAxis
@@ -822,7 +831,7 @@ function renderChart() {
       };
 
   overviewChart = new Chart(ctx, {
-    type: chartType,
+    type: isArea ? 'line' : chartType,
     data: { labels: data.labels, datasets: data.datasets },
     options: {
       responsive: true,
@@ -871,12 +880,13 @@ function renderChart() {
               return `${emoji}: ${value}${delta}`;
             },
             footer: function(items) {
-              // In stacked delta mode the stack is the total — surface it.
+              // In stacked modes the stack is the total — surface it.
               if (!stacked) return '';
               const total = items
                 .filter(i => i.dataset.stack === 'reactions')
                 .reduce((sum, i) => sum + i.parsed.y, 0);
-              return total > 0 ? `Total: +${total.toLocaleString()}` : '';
+              if (total <= 0) return '';
+              return deltaMode ? `Total: +${total.toLocaleString()}` : `Total: ${total.toLocaleString()}`;
             }
           }
         }
@@ -933,6 +943,30 @@ function getChartData() {
     ['buzz', 'Buzz'],
     ['collects', 'Collects']
   ];
+
+  if (chartType === 'area') {
+    // AoE2-style stacked area: the four reaction types as stacked bands over
+    // time; total height = total reactions. Always cumulative.
+    const resolved = filterByTimeRange(resolvedFull);
+    const datasets = [];
+    for (const [key, label] of REACTION_SERIES) {
+      if (!visibleLines[key]) continue;
+      datasets.push({
+        label,
+        data: resolved.map(s => ({ x: new Date(s.timestamp).getTime(), y: s[key] || 0 })),
+        borderColor: CHART_COLORS[key],
+        backgroundColor: CHART_COLORS[key] + 'CC',
+        borderWidth: 1,
+        stepped: 'before',
+        tension: 0,
+        fill: true,
+        stack: 'reactions',
+        pointRadius: 0,
+        pointHoverRadius: 4
+      });
+    }
+    return { labels: undefined, datasets, stacked: true };
+  }
 
   if (deltaMode) {
     // Fixed-interval buckets so bars are comparable (snapshots are irregular).
@@ -1059,6 +1093,170 @@ function filterByTimeRange(snapshots, timeRange = null) {
   const threshold = Date.now() - TIME_RANGE_MS[range];
 
   return snapshots.filter(s => new Date(s.timestamp).getTime() >= threshold);
+}
+
+// Fixed band colors for the images timeline ("player colors"). Assigned by
+// rank order once per render; "Other" is always the gray band.
+const TIMELINE_COLORS = [
+  '#4c6ef5', '#f03e3e', '#40c057', '#fab005', '#15aabf', '#e64980',
+  '#7950f2', '#fd7e14', '#82c91e', '#12b886', '#748ffc', '#d6336c'
+];
+const TIMELINE_OTHER_COLOR = '#5c5f66';
+
+let imagesTimelineChart = null;
+
+/**
+ * Sample a resolved (absolute) snapshot series at each grid timestamp:
+ * value = total reactions of the last snapshot at or before t (0 before the
+ * first). Two-pointer walk, O(n + m).
+ */
+function sampleStepSeries(resolved, gridTimes) {
+  const values = new Array(gridTimes.length).fill(0);
+  let i = 0;
+  let current = 0;
+  for (let g = 0; g < gridTimes.length; g++) {
+    while (i < resolved.length && new Date(resolved[i].timestamp).getTime() <= gridTimes[g]) {
+      current = getTotalReactions(resolved[i]);
+      i++;
+    }
+    values[g] = current;
+  }
+  return values;
+}
+
+/**
+ * AoE2-style timeline: every image is a colored band, stacked; total height is
+ * all reactions. Top N images by current total get their own band, the rest
+ * are summed into "Other". All series are resampled onto a common even time
+ * grid (stacking needs shared x values, and per-image snapshots don't align).
+ */
+function renderImagesTimeline() {
+  const canvas = document.getElementById('imagesTimelineChart');
+  if (!canvas) return;
+
+  if (imagesTimelineChart) {
+    imagesTimelineChart.destroy();
+    imagesTimelineChart = null;
+  }
+
+  const entries = (statsData.images || [])
+    .map(image => ({ image, resolved: resolveSnapshots(image.snapshots || []) }))
+    .filter(e => e.resolved.length > 0)
+    .sort((a, b) =>
+      getTotalReactions(b.resolved[b.resolved.length - 1]) -
+      getTotalReactions(a.resolved[a.resolved.length - 1]));
+
+  if (entries.length === 0) return;
+
+  // Even time grid from the earliest snapshot to now
+  let minT = Infinity;
+  for (const e of entries) {
+    minT = Math.min(minT, new Date(e.resolved[0].timestamp).getTime());
+  }
+  const maxT = Date.now();
+  if (!isFinite(minT) || maxT <= minT) return;
+
+  const POINTS = 120;
+  const step = (maxT - minT) / (POINTS - 1);
+  const gridTimes = [];
+  for (let k = 0; k < POINTS; k++) gridTimes.push(minT + k * step);
+
+  // Label format adapted to the covered span
+  const span = maxT - minT;
+  const fmtKey = span <= TIME_RANGE_MS['1d'] ? '1d'
+    : span <= TIME_RANGE_MS['7d'] ? '7d'
+    : span <= TIME_RANGE_MS['90d'] ? '30d'
+    : span <= TIME_RANGE_MS['1y'] ? '1y' : 'all';
+  const labels = gridTimes.map(t => formatChartDate(new Date(t), fmtKey));
+
+  const TOP_N = TIMELINE_COLORS.length;
+  const top = entries.slice(0, TOP_N);
+  const rest = entries.slice(TOP_N);
+
+  const datasets = top.map((e, idx) => ({
+    label: (e.image.name || `Image ${e.image.id}`).substring(0, 28),
+    data: sampleStepSeries(e.resolved, gridTimes),
+    borderColor: TIMELINE_COLORS[idx],
+    backgroundColor: TIMELINE_COLORS[idx] + 'D0',
+    borderWidth: 1,
+    fill: true,
+    tension: 0,
+    pointRadius: 0,
+    pointHoverRadius: 3
+  }));
+
+  if (rest.length > 0) {
+    const otherValues = new Array(gridTimes.length).fill(0);
+    for (const e of rest) {
+      const sampled = sampleStepSeries(e.resolved, gridTimes);
+      for (let k = 0; k < otherValues.length; k++) otherValues[k] += sampled[k];
+    }
+    datasets.push({
+      label: `Other (${rest.length} images)`,
+      data: otherValues,
+      borderColor: TIMELINE_OTHER_COLOR,
+      backgroundColor: TIMELINE_OTHER_COLOR + 'B0',
+      borderWidth: 1,
+      fill: true,
+      tension: 0,
+      pointRadius: 0,
+      pointHoverRadius: 3
+    });
+  }
+
+  imagesTimelineChart = new Chart(canvas.getContext('2d'), {
+    type: 'line',
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: {
+          display: true,
+          position: 'bottom',
+          labels: {
+            color: '#c1c2c5',
+            boxWidth: 10,
+            boxHeight: 10,
+            font: { size: 10 }
+          }
+        },
+        tooltip: {
+          backgroundColor: '#25262b',
+          titleColor: '#fff',
+          bodyColor: '#c1c2c5',
+          footerColor: '#fff',
+          borderColor: '#373a40',
+          borderWidth: 1,
+          padding: 10,
+          displayColors: true,
+          filter: item => item.parsed.y > 0,
+          itemSort: (a, b) => b.parsed.y - a.parsed.y,
+          callbacks: {
+            label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toLocaleString()}`,
+            footer: items => {
+              const total = items.reduce((sum, i) => sum + i.parsed.y, 0);
+              return total > 0 ? `Total: ${total.toLocaleString()}` : '';
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          stacked: true,
+          grid: { color: 'rgba(55, 58, 64, 0.5)', drawBorder: false },
+          ticks: { color: '#909296', maxTicksLimit: 8, maxRotation: 0, autoSkip: true }
+        },
+        y: {
+          stacked: true,
+          beginAtZero: true,
+          grid: { color: 'rgba(55, 58, 64, 0.5)', drawBorder: false },
+          ticks: { color: '#909296', callback: value => formatNumber(value) }
+        }
+      }
+    }
+  });
 }
 
 /**
@@ -1234,10 +1432,11 @@ function renderImageChart(image, timeRange) {
   }
 
   const resolvedFull = resolveSnapshots(image.snapshots || []);
-  const deltaMode = isDeltaMode(timeRange);
   const chartType = getEffectiveChartType(timeRange, imageChartTypes.get(image.id));
-  const stacked = deltaMode && chartType === 'bar';
-  const timeAxis = !deltaMode && chartType === 'line';
+  const isArea = chartType === 'area';
+  const deltaMode = !isArea && isDeltaMode(timeRange);
+  const stacked = (deltaMode && chartType === 'bar') || isArea;
+  const timeAxis = !deltaMode && (chartType === 'line' || isArea);
 
   const inRange = filterByTimeRange(resolvedFull, timeRange);
   if (inRange.length < 2) {
@@ -1270,7 +1469,25 @@ function renderImageChart(image, timeRange) {
   let labels;
   const datasets = [];
 
-  if (deltaMode) {
+  if (isArea) {
+    // AoE2-style stacked bands of this image's reaction types.
+    for (const [key, label] of REACTION_SERIES) {
+      if (!vis[key]) continue;
+      datasets.push({
+        label,
+        data: inRange.map(s => ({ x: new Date(s.timestamp).getTime(), y: s[key] || 0 })),
+        borderColor: CHART_COLORS[key],
+        backgroundColor: CHART_COLORS[key] + 'CC',
+        borderWidth: 1,
+        stepped: 'before',
+        tension: 0,
+        fill: true,
+        stack: 'reactions',
+        pointRadius: 0,
+        pointHoverRadius: 3
+      });
+    }
+  } else if (deltaMode) {
     const buckets = bucketedDeltas(resolvedFull, timeRange);
     labels = buckets.map(b => formatChartDate(new Date(b.timestamp), timeRange));
 
@@ -1357,7 +1574,7 @@ function renderImageChart(image, timeRange) {
     : { display: false, stacked };
 
   const chart = new Chart(ctx, {
-    type: chartType,
+    type: isArea ? 'line' : chartType,
     data: {
       labels,
       datasets
@@ -1413,7 +1630,8 @@ function renderImageChart(image, timeRange) {
               const total = items
                 .filter(i => i.dataset.stack === 'reactions')
                 .reduce((sum, i) => sum + i.parsed.y, 0);
-              return total > 0 ? `Total: +${total.toLocaleString()}` : '';
+              if (total <= 0) return '';
+              return deltaMode ? `Total: +${total.toLocaleString()}` : `Total: ${total.toLocaleString()}`;
             }
           }
         }
@@ -1720,6 +1938,9 @@ function createImageCard(image) {
               </button>
               <button class="image-chart-type-btn" data-type="bar" data-image-id="${escapeHtml(image.id)}" title="Bar">
                 <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="12" width="4" height="9"/><rect x="10" y="7" width="4" height="14"/><rect x="17" y="3" width="4" height="18"/></svg>
+              </button>
+              <button class="image-chart-type-btn" data-type="area" data-image-id="${escapeHtml(image.id)}" title="Stacked area">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M3 21V14l5-6 5 4 8-8v17z" opacity="0.45"/><path d="M3 21v-4l5-3 5 2 8-6v11z"/></svg>
               </button>
             </div>
           </div>

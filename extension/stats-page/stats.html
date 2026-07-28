@@ -182,6 +182,9 @@
               <button class="chart-type-btn" data-type="bar" title="Bar chart">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="12" width="4" height="9"/><rect x="10" y="7" width="4" height="14"/><rect x="17" y="3" width="4" height="18"/></svg>
               </button>
+              <button class="chart-type-btn" data-type="area" title="Stacked area (AoE2-style timeline)">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M3 21V14l5-6 5 4 8-8v17z" opacity="0.45"/><path d="M3 21v-4l5-3 5 2 8-6v11z"/></svg>
+              </button>
             </div>
             <button class="chart-type-btn log-scale-btn" id="logScaleBtn" title="Logarithmic scale (cumulative mode)">log</button>
             <div class="line-toggles" id="lineToggles">
@@ -274,6 +277,16 @@
 
       <!-- Images Tab -->
       <section class="tab-panel" id="tab-images" hidden>
+      <!-- AoE2-style stacked timeline: each image is a colored band -->
+      <section class="card chart-section images-timeline-section">
+        <div class="chart-header">
+          <h2>Reactions Timeline</h2>
+          <span class="widget-sub">each colored band is one image — top 12 by reactions, rest as "Other"</span>
+        </div>
+        <div class="chart-container">
+          <canvas id="imagesTimelineChart"></canvas>
+        </div>
+      </section>
       <!-- Images Section -->
       <section class="card images-section">
         <div class="images-header">

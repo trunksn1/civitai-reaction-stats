@@ -60,6 +60,7 @@ All in `scripts/fetch-stats.js` unless noted.
 | 4.5 | ✅ Stepped-line cumulative mode | Render cumulative lines with `stepped: 'before'` so sparse change-only snapshots don't draw invented slopes across silent gaps. Add a log-scale toggle for the "All" range. | S |
 | 4.6 | ✅ Declutter series defaults | Cumulative mode defaults to Total + likes + hearts visible; laughs/cries/buzz/collects opt-in. In stacked delta mode (4.3) hide the redundant Total series. | S |
 | 4.7 | ✅ Card sparklines | Always-visible total-reactions sparkline (no axes) on each image card; the full multi-series chart stays behind the expand. (Summary-tile sparklines deferred.) | M |
+| 4.8 | ✅ AoE2-style stacked timelines | Trends + per-image charts gain an "area" chart type (reaction types as stacked bands, always cumulative); Images tab gets a Reactions Timeline where each image is a colored band (top 12 by total + "Other"), resampled onto a common 120-point time grid. | M |
 
 ## Phase 5 — Extension-first architecture (share without GitHub Actions)
 
