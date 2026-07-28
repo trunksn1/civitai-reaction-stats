@@ -139,6 +139,21 @@
           <h2 class="widget-title">Top movers <span class="widget-sub">last 7 days</span></h2>
           <div class="top-movers" id="topMovers"></div>
         </div>
+        <div class="card overview-widget widget-wide">
+          <h2 class="widget-title">Reaction distribution <span class="widget-sub">images per reaction bracket</span></h2>
+          <div class="activity-chart-wrapper">
+            <canvas id="distributionChart"></canvas>
+          </div>
+          <div class="widget-footnote" id="distributionNote"></div>
+        </div>
+        <div class="card overview-widget">
+          <h2 class="widget-title">Hall of fame <span class="widget-sub">reaction personality</span></h2>
+          <div class="top-movers" id="hallOfFame"></div>
+        </div>
+        <div class="card overview-widget">
+          <h2 class="widget-title">On this day <span class="widget-sub">in earlier years</span></h2>
+          <div class="top-movers" id="onThisDay"></div>
+        </div>
       </section>
       </section><!-- /tab-overview -->
 
@@ -168,6 +183,7 @@
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="12" width="4" height="9"/><rect x="10" y="7" width="4" height="14"/><rect x="17" y="3" width="4" height="18"/></svg>
               </button>
             </div>
+            <button class="chart-type-btn log-scale-btn" id="logScaleBtn" title="Logarithmic scale (cumulative mode)">log</button>
             <div class="line-toggles" id="lineToggles">
               <label class="toggle-label">
                 <input type="checkbox" data-line="total" checked>
@@ -185,22 +201,22 @@
                 &#x2764;&#xFE0F;
               </label>
               <label class="toggle-label">
-                <input type="checkbox" data-line="laughs" checked>
+                <input type="checkbox" data-line="laughs">
                 <span class="toggle-dot laughs"></span>
                 &#x1F604;
               </label>
               <label class="toggle-label">
-                <input type="checkbox" data-line="cries" checked>
+                <input type="checkbox" data-line="cries">
                 <span class="toggle-dot cries"></span>
                 &#x1F622;
               </label>
               <label class="toggle-label">
-                <input type="checkbox" data-line="buzz" checked>
+                <input type="checkbox" data-line="buzz">
                 <span class="toggle-dot buzz"></span>
                 &#x26A1;
               </label>
               <label class="toggle-label">
-                <input type="checkbox" data-line="collects" checked>
+                <input type="checkbox" data-line="collects">
                 <span class="toggle-dot collects"></span>
                 &#x1F516;
               </label>
@@ -294,19 +310,19 @@
               <span class="toggle-dot hearts"></span>&#x2764;&#xFE0F;
             </label>
             <label class="toggle-label">
-              <input type="checkbox" data-line="laughs" checked>
+              <input type="checkbox" data-line="laughs">
               <span class="toggle-dot laughs"></span>&#x1F604;
             </label>
             <label class="toggle-label">
-              <input type="checkbox" data-line="cries" checked>
+              <input type="checkbox" data-line="cries">
               <span class="toggle-dot cries"></span>&#x1F622;
             </label>
             <label class="toggle-label">
-              <input type="checkbox" data-line="buzz" checked>
+              <input type="checkbox" data-line="buzz">
               <span class="toggle-dot buzz"></span>&#x26A1;
             </label>
             <label class="toggle-label">
-              <input type="checkbox" data-line="collects" checked>
+              <input type="checkbox" data-line="collects">
               <span class="toggle-dot collects"></span>&#x1F516;
             </label>
           </div>

@@ -187,6 +187,19 @@ Against that, each current view:
 What's already right and should not change: line for cumulative, bar for deltas,
 auto-switching by range, delta clamping, no pie charts anywhere.
 
+### 5.3 Palette validation note (2026-07-28)
+
+Running a CVD (colorblindness) validator on the default chart palette against the dark
+surface found one real weakness: **Total purple `#be4bdb` vs Likes blue `#228be6` are
+nearly indistinguishable under deuteranopia** (ΔE ≈ 2.9; several hues also sit outside
+the ideal lightness band for the dark surface). The palette matches Civitai's own
+reaction colors and is user-customizable, so it was not repainted; instead the charts
+carry secondary encoding: the Total line renders heavier (3px vs 2px), stacked delta
+bars drop the Total series entirely (the stack is the total, with surface-color gaps
+between segments), and every series is identified by an emoji in toggles and tooltips,
+never by color alone. If a future default-palette revision is ever on the table,
+re-stepping the Likes blue away from the Total purple is the fix.
+
 ## 6. What else could be shown (data & fun)
 
 Ranked roughly by delight-per-effort, from data already collected:

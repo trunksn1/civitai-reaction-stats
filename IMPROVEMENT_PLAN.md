@@ -53,13 +53,13 @@ All in `scripts/fetch-stats.js` unless noted.
 
 | # | Task | Detail | Size |
 |---|------|--------|------|
-| 4.1 | Time-scale x-axis | Bundle `chartjs-adapter-date-fns` (or luxon) into `extension/lib/`; switch overview + per-image charts to `scales.x.type: 'time'` with raw timestamps as `{x, y}` points. Verify "All" view no longer compresses months into the same width as days. | M |
-| 4.2 | Fixed-interval delta buckets | Replace per-snapshot `computeDeltas` for bar charts with calendar bucketing (reuse/generalize `dailyActivity`): 1d → hourly buckets, 7d → 6h, 30d/90d → daily. Bars become comparable. | M |
-| 4.3 | Stacked delta bars | In delta mode, render likes/hearts/laughs/cries as a stacked bar (stack = total); drop the separate "Total" series there. Keep "Total" as a line only in cumulative mode, default-off. | M |
+| 4.1 | ✅ Time-scale x-axis | Done via a plain `linear` scale over epoch-ms `{x, y}` points with a formatting tick callback — honest spacing with **no vendored date adapter needed**. | M |
+| 4.2 | ✅ Fixed-interval delta buckets | Replace per-snapshot `computeDeltas` for bar charts with calendar bucketing (reuse/generalize `dailyActivity`): 1d → hourly buckets, 7d → 6h, 30d/90d → daily. Bars become comparable. | M |
+| 4.3 | ✅ Stacked delta bars | In delta mode, render likes/hearts/laughs/cries as a stacked bar (stack = total); drop the separate "Total" series there. Keep "Total" as a line only in cumulative mode, default-off. | M |
 | 4.4 | ✅ `civitai.red` support in extension | Add `https://civitai.red/*` to `host_permissions` + `content_scripts.matches` so the Stats menu also appears there. | S |
-| 4.5 | Stepped-line cumulative mode | Render cumulative lines with `stepped: 'before'` so sparse change-only snapshots don't draw invented slopes across silent gaps. Add a log-scale toggle for the "All" range. | S |
-| 4.6 | Declutter series defaults | Cumulative mode defaults to Total + likes + hearts visible; laughs/cries/buzz/collects opt-in. In stacked delta mode (4.3) hide the redundant Total series. | S |
-| 4.7 | Card sparklines | Always-visible total-reactions sparkline (no axes) on each image card and inside each summary tile; the full multi-series chart stays behind the expand. | M |
+| 4.5 | ✅ Stepped-line cumulative mode | Render cumulative lines with `stepped: 'before'` so sparse change-only snapshots don't draw invented slopes across silent gaps. Add a log-scale toggle for the "All" range. | S |
+| 4.6 | ✅ Declutter series defaults | Cumulative mode defaults to Total + likes + hearts visible; laughs/cries/buzz/collects opt-in. In stacked delta mode (4.3) hide the redundant Total series. | S |
+| 4.7 | ✅ Card sparklines | Always-visible total-reactions sparkline (no axes) on each image card; the full multi-series chart stays behind the expand. (Summary-tile sparklines deferred.) | M |
 
 ## Phase 5 — Extension-first architecture (share without GitHub Actions)
 
@@ -97,11 +97,11 @@ Ordered by delight-per-effort; each is an independent widget on the Overview tab
 | 6.1 | Calendar heatmap (GitHub-style, reactions gained/day, 12 months) | existing total snapshots | M |
 | 6.2 | Best time to post — DoW × hour heatmap of reaction inflow; port aggregation approach from the old `analysis/` script but feed it per-user snapshot deltas | existing snapshots | M |
 | 6.3 | Records & milestones — best day, gaining streak, next round-number milestone with linear-projection ETA | existing | M |
-| 6.4 | Distribution histogram + "top N images = X% of reactions" | existing | S |
+| 6.4 | ✅ Distribution histogram + "top N images = X% of reactions" | existing | S |
 | 6.5 | Week-vs-last-week sparklines on summary cards | existing | S |
 | 6.6 | Image velocity / half-life + "hidden gems" (old images still accelerating) | existing | M |
-| 6.7 | Reaction personality (funniest / most loved / most tipped) | existing | S |
-| 6.8 | "On this day" (posted a year ago + earned since) | existing | S |
+| 6.7 | ✅ Reaction personality (funniest / most loved / most tipped) | existing | S |
+| 6.8 | ✅ "On this day" (posted a year ago + earned since) | existing | S |
 | 6.9 | Monthly recap card exported as PNG (canvas-rendered, Wrapped-style) | existing | L |
 | 6.10 | Prompt/keyword performance correlation — requires keeping more of `meta.prompt` (or a keyword set) at collection time | collector change + UI | L |
 

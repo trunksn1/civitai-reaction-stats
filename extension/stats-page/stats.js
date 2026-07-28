@@ -11,23 +11,47 @@ let currentTab = 'overview';
 let currentTimeRange = '1d';
 let currentChartType = 'auto'; // 'auto', 'line', 'bar'
 let currentPeriodSort = 'total';
+let useLogScale = false;
 const imageChartTypes = new Map(); // Map<imageId, 'auto'|'line'|'bar'>
+// Defaults keep the chart readable: Total + the two big series. The rest are
+// one click away (8 simultaneous lines was spaghetti).
 let visibleLines = {
   total: true,
   likes: true,
   hearts: true,
-  laughs: true,
-  cries: true,
-  buzz: true,
-  collects: true
+  laughs: false,
+  cries: false,
+  buzz: false,
+  collects: false
 };
 let displayedImages = 10;
 const IMAGES_PER_PAGE = 10;
 
+// Time ranges (ms) and delta-bucket sizes (ms) per range. Buckets are fixed
+// calendar intervals so "gained per period" bars are comparable — snapshots
+// are change-only and therefore irregularly spaced.
+const TIME_RANGE_MS = {
+  '1d': 1 * 24 * 60 * 60 * 1000,
+  '7d': 7 * 24 * 60 * 60 * 1000,
+  '30d': 30 * 24 * 60 * 60 * 1000,
+  '90d': 90 * 24 * 60 * 60 * 1000,
+  '1y': 365 * 24 * 60 * 60 * 1000
+};
+const BUCKET_MS = {
+  '1d': 60 * 60 * 1000,        // hourly buckets
+  '7d': 6 * 60 * 60 * 1000,    // 6-hour buckets
+  '30d': 24 * 60 * 60 * 1000,  // daily buckets
+  '90d': 24 * 60 * 60 * 1000   // daily buckets
+};
+
+// Chart surface color — used as the gap ring between stacked bar segments
+const CHART_SURFACE = '#25262b';
+
 // Track per-image chart state
 const imageCharts = new Map(); // Map<imageId, Chart>
 const imageTimeRanges = new Map(); // Map<imageId, timeRange>
-let imageLineVisibility = { total: true, likes: true, hearts: true, laughs: true, cries: true, buzz: true, collects: true };
+const sparklineCharts = new Map(); // Map<imageId, Chart>
+let imageLineVisibility = { total: true, likes: true, hearts: true, laughs: false, cries: false, buzz: false, collects: false };
 
 // Emoji labels for chart tooltips
 const LABEL_EMOJI = {
@@ -52,6 +76,40 @@ function isDeltaMode(timeRange) {
  * loaded by stats.html before this file) — the same code the collector uses.
  */
 const computeDeltas = SnapshotCodec.computeDeltas;
+
+/**
+ * Sum per-snapshot gains into FIXED calendar buckets for a time range.
+ * Input is the full RESOLVED (absolute) series; output is one entry per bucket
+ * from range start to now, zero-filled, each { timestamp, likes, hearts, ... }.
+ * A gain between two snapshots is attributed to the bucket of the later one.
+ */
+function bucketedDeltas(resolvedSnapshots, timeRange) {
+  const bucketMs = BUCKET_MS[timeRange];
+  const rangeMs = TIME_RANGE_MS[timeRange];
+  if (!bucketMs || !rangeMs) return [];
+
+  const now = Date.now();
+  const start = Math.floor((now - rangeMs) / bucketMs) * bucketMs;
+
+  const buckets = [];
+  for (let t = start; t <= now; t += bucketMs) {
+    const b = { timestamp: new Date(t).toISOString() };
+    for (const [key] of SnapshotCodec.FIELDS) b[key] = 0;
+    buckets.push(b);
+  }
+
+  const deltas = computeDeltas(resolvedSnapshots);
+  for (const d of deltas) {
+    const ts = new Date(d.timestamp).getTime();
+    if (ts < start || ts > now) continue;
+    const idx = Math.floor((ts - start) / bucketMs);
+    const b = buckets[idx];
+    if (!b) continue;
+    for (const [key] of SnapshotCodec.FIELDS) b[key] += d[key] || 0;
+  }
+
+  return buckets;
+}
 
 /**
  * Get effective chart type based on time range and user override.
@@ -134,6 +192,14 @@ function setupEventListeners() {
       saveChartTypePreference();
       updateChart();
     });
+  });
+
+  // Log scale toggle (applies in cumulative mode)
+  const logBtn = document.getElementById('logScaleBtn');
+  logBtn.addEventListener('click', () => {
+    useLogScale = !useLogScale;
+    logBtn.classList.toggle('active', useLogScale);
+    updateChart();
   });
 
   // Line toggles
@@ -252,6 +318,9 @@ function renderStats() {
   renderReactionMix();
   renderActivityChart();
   renderTopMovers();
+  renderDistribution();
+  renderHallOfFame();
+  renderOnThisDay();
 
   // Render images
   renderImages(document.getElementById('sortSelect').value);
@@ -520,6 +589,193 @@ function renderTopMovers() {
   }).join('');
 }
 
+let distributionChart = null;
+
+/**
+ * Reaction distribution: how many images fall in each total-reactions bracket,
+ * plus a Pareto footnote ("top 10% of images hold X% of reactions").
+ */
+function renderDistribution() {
+  const canvas = document.getElementById('distributionChart');
+  if (!canvas) return;
+
+  if (distributionChart) {
+    distributionChart.destroy();
+    distributionChart = null;
+  }
+
+  const totals = (statsData.images || [])
+    .map(img => getTotalReactions(getCurrentStats(img)))
+    .sort((a, b) => b - a);
+  if (totals.length === 0) return;
+
+  const BRACKETS = [
+    { label: '0', min: 0, max: 0 },
+    { label: '1-9', min: 1, max: 9 },
+    { label: '10-24', min: 10, max: 24 },
+    { label: '25-49', min: 25, max: 49 },
+    { label: '50-99', min: 50, max: 99 },
+    { label: '100-249', min: 100, max: 249 },
+    { label: '250-999', min: 250, max: 999 },
+    { label: '1000+', min: 1000, max: Infinity }
+  ];
+  const counts = BRACKETS.map(b => totals.filter(t => t >= b.min && t <= b.max).length);
+
+  distributionChart = new Chart(canvas.getContext('2d'), {
+    type: 'bar',
+    data: {
+      labels: BRACKETS.map(b => b.label),
+      datasets: [{
+        label: 'Images',
+        data: counts,
+        backgroundColor: CHART_COLORS.total,
+        borderRadius: 3,
+        maxBarThickness: 40
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#25262b',
+          titleColor: '#fff',
+          bodyColor: '#c1c2c5',
+          borderColor: '#373a40',
+          borderWidth: 1,
+          padding: 10,
+          callbacks: {
+            label: ctx => `${ctx.parsed.y} image${ctx.parsed.y === 1 ? '' : 's'}`
+          }
+        }
+      },
+      scales: {
+        x: {
+          grid: { display: false },
+          ticks: { color: '#909296', maxRotation: 0 }
+        },
+        y: {
+          beginAtZero: true,
+          grid: { color: 'rgba(55, 58, 64, 0.5)' },
+          ticks: { color: '#909296', precision: 0 }
+        }
+      }
+    }
+  });
+
+  const note = document.getElementById('distributionNote');
+  const grand = totals.reduce((a, b) => a + b, 0);
+  if (note && grand > 0) {
+    const topN = Math.max(1, Math.ceil(totals.length * 0.1));
+    const topSum = totals.slice(0, topN).reduce((a, b) => a + b, 0);
+    const pct = Math.round((topSum / grand) * 100);
+    note.textContent = `Your top ${topN} image${topN === 1 ? '' : 's'} (10%) hold${topN === 1 ? 's' : ''} ${pct}% of all reactions`;
+  }
+}
+
+/**
+ * Hall of fame: the image with the strongest character per reaction type —
+ * highest laugh share ("funniest"), heart share, cry share, and most buzz.
+ * Ratio categories require 10+ total reactions so tiny samples don't win.
+ */
+function renderHallOfFame() {
+  const container = document.getElementById('hallOfFame');
+  if (!container) return;
+
+  const MIN_TOTAL = 10;
+  const categories = [
+    { key: 'laughs', title: 'Funniest', emoji: '\u{1F604}' },
+    { key: 'hearts', title: 'Most loved', emoji: '❤️' },
+    { key: 'cries', title: 'Most moving', emoji: '\u{1F622}' },
+    { key: 'buzz', title: 'Most tipped', emoji: '⚡', absolute: true }
+  ];
+
+  const rows = [];
+  for (const cat of categories) {
+    let best = null;
+    let bestScore = 0;
+    for (const image of statsData.images || []) {
+      const stats = getCurrentStats(image);
+      const total = getTotalReactions(stats);
+      if (!cat.absolute && total < MIN_TOTAL) continue;
+      const score = cat.absolute ? (stats[cat.key] || 0) : (stats[cat.key] || 0) / total;
+      if (score > bestScore) {
+        bestScore = score;
+        best = { image, stats };
+      }
+    }
+    if (!best) continue;
+
+    const img = best.image;
+    const detail = cat.absolute
+      ? `${formatNumber(best.stats[cat.key] || 0)} buzz`
+      : `${Math.round(bestScore * 100)}% ${cat.key}`;
+    const thumb = img.thumbnailUrl
+      ? `<img src="${escapeHtml(img.thumbnailUrl)}" alt="" loading="lazy">`
+      : '<div class="placeholder">\u{1F5BC}️</div>';
+    rows.push(`
+      <a class="mover-row" href="${escapeHtml(img.url || '#')}" target="_blank" rel="noopener">
+        <div class="mover-thumb">${thumb}</div>
+        <div class="mover-info">
+          <div class="mover-name">${cat.emoji} ${cat.title}</div>
+          <div class="mover-detail">${escapeHtml(img.name || `Image ${img.id}`)}</div>
+        </div>
+        <div class="mover-gain">${detail}</div>
+      </a>`);
+  }
+
+  container.innerHTML = rows.length
+    ? rows.join('')
+    : '<div class="widget-empty">Needs images with 10+ reactions</div>';
+}
+
+/**
+ * On this day: images posted on today's month/day in an earlier year,
+ * with what they've earned since.
+ */
+function renderOnThisDay() {
+  const container = document.getElementById('onThisDay');
+  if (!container) return;
+
+  const now = new Date();
+  const matches = (statsData.images || [])
+    .filter(img => {
+      if (!img.createdAt) return false;
+      const d = new Date(img.createdAt);
+      return d.getMonth() === now.getMonth() &&
+             d.getDate() === now.getDate() &&
+             d.getFullYear() < now.getFullYear();
+    })
+    .map(image => ({
+      image,
+      stats: getCurrentStats(image),
+      years: now.getFullYear() - new Date(image.createdAt).getFullYear()
+    }))
+    .sort((a, b) => getTotalReactions(b.stats) - getTotalReactions(a.stats))
+    .slice(0, 3);
+
+  if (matches.length === 0) {
+    container.innerHTML = '<div class="widget-empty">Nothing posted on this date in earlier years</div>';
+    return;
+  }
+
+  container.innerHTML = matches.map(({ image, stats, years }) => {
+    const thumb = image.thumbnailUrl
+      ? `<img src="${escapeHtml(image.thumbnailUrl)}" alt="" loading="lazy">`
+      : '<div class="placeholder">\u{1F5BC}️</div>';
+    return `
+      <a class="mover-row" href="${escapeHtml(image.url || '#')}" target="_blank" rel="noopener">
+        <div class="mover-thumb">${thumb}</div>
+        <div class="mover-info">
+          <div class="mover-name">${escapeHtml(image.name || `Image ${image.id}`)}</div>
+          <div class="mover-detail">${years} year${years === 1 ? '' : 's'} ago today</div>
+        </div>
+        <div class="mover-gain">${formatNumber(getTotalReactions(stats))}</div>
+      </a>`;
+  }).join('');
+}
+
 /**
  * Render the overview chart
  */
@@ -531,9 +787,14 @@ function renderChart() {
     overviewChart.destroy();
   }
 
-  const data = getChartData();
   const chartType = getEffectiveChartType(currentTimeRange, currentChartType);
   const deltaMode = isDeltaMode(currentTimeRange);
+  const data = getChartData();
+  const stacked = !!data.stacked;
+  // Cumulative lines run on a true time axis (linear ms) so uneven snapshot
+  // spacing renders honestly; bars use evenly-spaced category buckets.
+  const timeAxis = !deltaMode && chartType === 'line';
+  const logY = !deltaMode && useLogScale;
 
   // Update chart title
   const titleEl = document.getElementById('chartTitle');
@@ -541,9 +802,28 @@ function renderChart() {
     titleEl.textContent = deltaMode ? 'Reactions Gained' : 'Reactions Over Time';
   }
 
+  const xScale = timeAxis
+    ? {
+        type: 'linear',
+        min: currentTimeRange === 'all' ? undefined : Date.now() - TIME_RANGE_MS[currentTimeRange],
+        max: currentTimeRange === 'all' ? undefined : Date.now(),
+        grid: { color: 'rgba(55, 58, 64, 0.5)', drawBorder: false },
+        ticks: {
+          color: '#909296',
+          maxTicksLimit: 8,
+          maxRotation: 0,
+          callback: value => formatChartDate(new Date(value), currentTimeRange)
+        }
+      }
+    : {
+        stacked,
+        grid: { color: 'rgba(55, 58, 64, 0.5)', drawBorder: false },
+        ticks: { color: '#909296', maxTicksLimit: 8, maxRotation: 0, autoSkip: true }
+      };
+
   overviewChart = new Chart(ctx, {
     type: chartType,
-    data: data,
+    data: { labels: data.labels, datasets: data.datasets },
     options: {
       responsive: true,
       maintainAspectRatio: false,
@@ -559,11 +839,19 @@ function renderChart() {
           backgroundColor: '#25262b',
           titleColor: '#fff',
           bodyColor: '#c1c2c5',
+          footerColor: '#fff',
           borderColor: '#373a40',
           borderWidth: 1,
           padding: 12,
           displayColors: true,
           callbacks: {
+            title: function(items) {
+              if (!items.length) return '';
+              if (timeAxis) {
+                return formatDate(new Date(items[0].parsed.x));
+              }
+              return items[0].label;
+            },
             label: function(context) {
               const emoji = LABEL_EMOJI[context.dataset.label] || context.dataset.label;
               const value = context.parsed.y.toLocaleString();
@@ -573,29 +861,31 @@ function renderChart() {
               const idx = context.dataIndex;
               let delta = '';
               if (idx > 0) {
-                const prev = context.dataset.data[idx - 1];
+                const prevPoint = context.dataset.data[idx - 1];
+                const prev = (prevPoint && typeof prevPoint === 'object') ? prevPoint.y : prevPoint;
                 const diff = context.parsed.y - prev;
                 if (diff !== 0) {
                   delta = ` (${diff >= 0 ? '+' : ''}${diff.toLocaleString()})`;
                 }
               }
               return `${emoji}: ${value}${delta}`;
+            },
+            footer: function(items) {
+              // In stacked delta mode the stack is the total — surface it.
+              if (!stacked) return '';
+              const total = items
+                .filter(i => i.dataset.stack === 'reactions')
+                .reduce((sum, i) => sum + i.parsed.y, 0);
+              return total > 0 ? `Total: +${total.toLocaleString()}` : '';
             }
           }
         }
       },
       scales: {
-        x: {
-          grid: {
-            color: 'rgba(55, 58, 64, 0.5)',
-            drawBorder: false
-          },
-          ticks: {
-            color: '#909296',
-            maxTicksLimit: 8
-          }
-        },
+        x: xScale,
         y: {
+          stacked,
+          type: logY ? 'logarithmic' : 'linear',
           grid: {
             color: 'rgba(55, 58, 64, 0.5)',
             drawBorder: false
@@ -604,7 +894,7 @@ function renderChart() {
             color: '#909296',
             callback: value => formatNumber(value)
           },
-          beginAtZero: true,
+          beginAtZero: !logY,
           title: deltaMode ? {
             display: true,
             text: 'Gained per period',
@@ -629,113 +919,131 @@ function updateChart() {
  * Get chart data based on current time range and visible lines
  */
 function getChartData() {
-  const resolved = filterByTimeRange(resolveSnapshots(statsData.totalSnapshots || []));
+  const resolvedFull = resolveSnapshots(statsData.totalSnapshots || []);
   const deltaMode = isDeltaMode(currentTimeRange);
-  const snapshots = deltaMode ? computeDeltas(resolved) : resolved;
+  const chartType = getEffectiveChartType(currentTimeRange, currentChartType);
 
-  const labels = snapshots.map(s => formatChartDate(new Date(s.timestamp), currentTimeRange));
+  const REACTION_SERIES = [
+    ['likes', 'Likes'],
+    ['hearts', 'Hearts'],
+    ['laughs', 'Laughs'],
+    ['cries', 'Cries']
+  ];
+  const EXTRA_SERIES = [
+    ['buzz', 'Buzz'],
+    ['collects', 'Collects']
+  ];
 
+  if (deltaMode) {
+    // Fixed-interval buckets so bars are comparable (snapshots are irregular).
+    const buckets = bucketedDeltas(resolvedFull, currentTimeRange);
+    const labels = buckets.map(b => formatChartDate(new Date(b.timestamp), currentTimeRange));
+    const stacked = chartType === 'bar';
+    const datasets = [];
+
+    const barDataset = (key, label, stack) => ({
+      label,
+      data: buckets.map(b => b[key] || 0),
+      backgroundColor: CHART_COLORS[key],
+      stack,
+      // 1px surface border = visible gap between stacked segments and bars
+      borderColor: CHART_SURFACE,
+      borderWidth: 1,
+      borderSkipped: false,
+      borderRadius: 2,
+      maxBarThickness: 40
+    });
+    const lineDataset = (key, label) => ({
+      label,
+      data: buckets.map(b => b[key] || 0),
+      borderColor: CHART_COLORS[key],
+      backgroundColor: CHART_COLORS[key] + '20',
+      borderWidth: 2,
+      tension: 0,
+      fill: false,
+      pointRadius: buckets.length > 50 ? 0 : 3,
+      pointHoverRadius: 5
+    });
+
+    // In stacked bars the stack itself IS the total — no Total series needed.
+    // In line-override delta mode, keep an explicit (thicker) Total line.
+    if (!stacked && visibleLines.total) {
+      datasets.push({
+        label: 'Total',
+        data: buckets.map(b => (b.likes || 0) + (b.hearts || 0) + (b.laughs || 0) + (b.cries || 0)),
+        borderColor: CHART_COLORS.total,
+        backgroundColor: CHART_COLORS.total + '20',
+        borderWidth: 3,
+        tension: 0,
+        fill: false,
+        pointRadius: buckets.length > 50 ? 0 : 3,
+        pointHoverRadius: 5
+      });
+    }
+    for (const [key, label] of REACTION_SERIES) {
+      if (!visibleLines[key]) continue;
+      datasets.push(stacked ? barDataset(key, label, 'reactions') : lineDataset(key, label));
+    }
+    // Buzz/collects are not part of the reaction total: own stacks, side by side.
+    for (const [key, label] of EXTRA_SERIES) {
+      if (!visibleLines[key]) continue;
+      datasets.push(stacked ? barDataset(key, label, key) : lineDataset(key, label));
+    }
+
+    return { labels, datasets, stacked };
+  }
+
+  // Cumulative mode.
+  const resolved = filterByTimeRange(resolvedFull);
+
+  if (chartType === 'bar') {
+    // Rarely used override: cumulative bars on evenly spaced snapshot labels.
+    const labels = resolved.map(s => formatChartDate(new Date(s.timestamp), currentTimeRange));
+    const datasets = [];
+    const push = (key, label) => datasets.push({
+      label,
+      data: resolved.map(s => key === 'total' ? getTotalReactions(s) : (s[key] || 0)),
+      backgroundColor: CHART_COLORS[key],
+      borderColor: CHART_SURFACE,
+      borderWidth: 1,
+      borderSkipped: false,
+      borderRadius: 2,
+      maxBarThickness: 40
+    });
+    if (visibleLines.total) push('total', 'Total');
+    for (const [key, label] of [...REACTION_SERIES, ...EXTRA_SERIES]) {
+      if (visibleLines[key]) push(key, label);
+    }
+    return { labels, datasets, stacked: false };
+  }
+
+  // Cumulative lines: stepped, on a true time axis ({x: ms, y: value}).
+  // Stepped because counters only move at sample points — a straight slope
+  // across a silent gap would invent growth that didn't happen.
   const datasets = [];
-
-  if (visibleLines.total) {
-    datasets.push({
-      label: 'Total',
-      data: snapshots.map(s => (s.likes || 0) + (s.hearts || 0) + (s.laughs || 0) + (s.cries || 0)),
-      borderColor: CHART_COLORS.total,
-      backgroundColor: CHART_COLORS.total + '20',
-      borderWidth: 2,
-      tension: 0,
-      fill: false,
-      pointRadius: snapshots.length > 50 ? 0 : 3,
-      pointHoverRadius: 5
-    });
+  const push = (key, label, width) => datasets.push({
+    label,
+    data: resolved.map(s => ({
+      x: new Date(s.timestamp).getTime(),
+      y: key === 'total' ? getTotalReactions(s) : (s[key] || 0)
+    })),
+    borderColor: CHART_COLORS[key],
+    backgroundColor: CHART_COLORS[key] + '20',
+    borderWidth: width,
+    stepped: 'before',
+    tension: 0,
+    fill: false,
+    pointRadius: resolved.length > 50 ? 0 : 3,
+    pointHoverRadius: 5
+  });
+  // Total is heavier on purpose: weight (not only hue) separates it from the
+  // component series — the default purple/blue pair is weak under deutan CVD.
+  if (visibleLines.total) push('total', 'Total', 3);
+  for (const [key, label] of [...REACTION_SERIES, ...EXTRA_SERIES]) {
+    if (visibleLines[key]) push(key, label, 2);
   }
 
-  if (visibleLines.likes) {
-    datasets.push({
-      label: 'Likes',
-      data: snapshots.map(s => s.likes || 0),
-      borderColor: CHART_COLORS.likes,
-      backgroundColor: CHART_COLORS.likes + '20',
-      borderWidth: 2,
-      tension: 0,
-      fill: false,
-      pointRadius: snapshots.length > 50 ? 0 : 3,
-      pointHoverRadius: 5
-    });
-  }
-
-  if (visibleLines.hearts) {
-    datasets.push({
-      label: 'Hearts',
-      data: snapshots.map(s => s.hearts || 0),
-      borderColor: CHART_COLORS.hearts,
-      backgroundColor: CHART_COLORS.hearts + '20',
-      borderWidth: 2,
-      tension: 0,
-      fill: false,
-      pointRadius: snapshots.length > 50 ? 0 : 3,
-      pointHoverRadius: 5
-    });
-  }
-
-  if (visibleLines.laughs) {
-    datasets.push({
-      label: 'Laughs',
-      data: snapshots.map(s => s.laughs || 0),
-      borderColor: CHART_COLORS.laughs,
-      backgroundColor: CHART_COLORS.laughs + '20',
-      borderWidth: 2,
-      tension: 0,
-      fill: false,
-      pointRadius: snapshots.length > 50 ? 0 : 3,
-      pointHoverRadius: 5
-    });
-  }
-
-  if (visibleLines.cries) {
-    datasets.push({
-      label: 'Cries',
-      data: snapshots.map(s => s.cries || 0),
-      borderColor: CHART_COLORS.cries,
-      backgroundColor: CHART_COLORS.cries + '20',
-      borderWidth: 2,
-      tension: 0,
-      fill: false,
-      pointRadius: snapshots.length > 50 ? 0 : 3,
-      pointHoverRadius: 5
-    });
-  }
-
-  if (visibleLines.buzz) {
-    datasets.push({
-      label: 'Buzz',
-      data: snapshots.map(s => s.buzz || 0),
-      borderColor: CHART_COLORS.buzz,
-      backgroundColor: CHART_COLORS.buzz + '20',
-      borderWidth: 2,
-      tension: 0,
-      fill: false,
-      pointRadius: snapshots.length > 50 ? 0 : 3,
-      pointHoverRadius: 5
-    });
-  }
-
-  if (visibleLines.collects) {
-    datasets.push({
-      label: 'Collects',
-      data: snapshots.map(s => s.collects || 0),
-      borderColor: CHART_COLORS.collects,
-      backgroundColor: CHART_COLORS.collects + '20',
-      borderWidth: 2,
-      tension: 0,
-      fill: false,
-      pointRadius: snapshots.length > 50 ? 0 : 3,
-      pointHoverRadius: 5
-    });
-  }
-
-  return { labels, datasets };
+  return { labels: undefined, datasets, stacked: false };
 }
 
 /**
@@ -748,16 +1056,7 @@ function filterByTimeRange(snapshots, timeRange = null) {
     return snapshots;
   }
 
-  const now = Date.now();
-  const ranges = {
-    '1d': 1 * 24 * 60 * 60 * 1000,
-    '7d': 7 * 24 * 60 * 60 * 1000,
-    '30d': 30 * 24 * 60 * 60 * 1000,
-    '90d': 90 * 24 * 60 * 60 * 1000,
-    '1y': 365 * 24 * 60 * 60 * 1000
-  };
-
-  const threshold = now - ranges[range];
+  const threshold = Date.now() - TIME_RANGE_MS[range];
 
   return snapshots.filter(s => new Date(s.timestamp).getTime() >= threshold);
 }
@@ -774,6 +1073,8 @@ function renderImages(sortBy = 'newest') {
   imageCharts.forEach(chart => chart.destroy());
   imageCharts.clear();
   imageTimeRanges.clear();
+  sparklineCharts.forEach(chart => chart.destroy());
+  sparklineCharts.clear();
 
   // Update count
   document.getElementById('imageCount').textContent = `${images.length} images`;
@@ -783,11 +1084,62 @@ function renderImages(sortBy = 'newest') {
 
   grid.innerHTML = toDisplay.map(img => createImageCard(img)).join('');
 
+  // Always-visible total-reactions sparkline on each card
+  toDisplay.forEach(img => renderSparkline(img));
+
   // Set up event listeners for chart toggles
   setupImageChartListeners(toDisplay);
 
   // Show/hide load more button
   loadMoreContainer.style.display = displayedImages < images.length ? 'flex' : 'none';
+}
+
+/**
+ * Tiny always-visible sparkline: total reactions over all time, no axes, no
+ * hover — the card-level answer to "is this image moving?".
+ */
+function renderSparkline(image) {
+  const canvas = document.getElementById(`spark-${image.id}`);
+  if (!canvas) return;
+
+  const resolved = resolveSnapshots(image.snapshots || []);
+  if (resolved.length < 2) return;
+
+  const data = resolved.map(s => ({
+    x: new Date(s.timestamp).getTime(),
+    y: getTotalReactions(s)
+  }));
+
+  const chart = new Chart(canvas.getContext('2d'), {
+    type: 'line',
+    data: {
+      datasets: [{
+        data,
+        borderColor: CHART_COLORS.total,
+        borderWidth: 1.5,
+        stepped: 'before',
+        tension: 0,
+        fill: false,
+        pointRadius: 0
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      events: [],
+      plugins: {
+        legend: { display: false },
+        tooltip: { enabled: false }
+      },
+      scales: {
+        x: { type: 'linear', display: false },
+        y: { display: false }
+      }
+    }
+  });
+
+  sparklineCharts.set(image.id, chart);
 }
 
 /**
@@ -881,11 +1233,14 @@ function renderImageChart(image, timeRange) {
     imageCharts.get(image.id).destroy();
   }
 
-  const resolved = filterByTimeRange(resolveSnapshots(image.snapshots || []), timeRange);
+  const resolvedFull = resolveSnapshots(image.snapshots || []);
   const deltaMode = isDeltaMode(timeRange);
-  const snapshots = deltaMode ? computeDeltas(resolved) : resolved;
+  const chartType = getEffectiveChartType(timeRange, imageChartTypes.get(image.id));
+  const stacked = deltaMode && chartType === 'bar';
+  const timeAxis = !deltaMode && chartType === 'line';
 
-  if (snapshots.length < 2) {
+  const inRange = filterByTimeRange(resolvedFull, timeRange);
+  if (inRange.length < 2) {
     // Not enough data points
     canvas.style.display = 'none';
     const wrapper = canvas.closest('.image-chart-wrapper');
@@ -900,105 +1255,106 @@ function renderImageChart(image, timeRange) {
   const emptyMsg = wrapper.querySelector('.image-chart-empty');
   if (emptyMsg) emptyMsg.remove();
 
-  const labels = snapshots.map(s => formatChartDate(new Date(s.timestamp), timeRange));
-
   const vis = imageLineVisibility;
+  const REACTION_SERIES = [
+    ['likes', 'Likes'],
+    ['hearts', 'Hearts'],
+    ['laughs', 'Laughs'],
+    ['cries', 'Cries']
+  ];
+  const EXTRA_SERIES = [
+    ['buzz', 'Buzz'],
+    ['collects', 'Collects']
+  ];
 
+  let labels;
   const datasets = [];
 
-  if (vis.total) {
-    datasets.push({
-      label: 'Total',
-      data: snapshots.map(s => (s.likes || 0) + (s.hearts || 0) + (s.laughs || 0) + (s.cries || 0)),
-      borderColor: CHART_COLORS.total,
-      backgroundColor: CHART_COLORS.total + '20',
-      borderWidth: 2,
-      tension: 0,
-      fill: false,
-      pointRadius: snapshots.length > 30 ? 0 : 2,
-      pointHoverRadius: 4
-    });
-  }
+  if (deltaMode) {
+    const buckets = bucketedDeltas(resolvedFull, timeRange);
+    labels = buckets.map(b => formatChartDate(new Date(b.timestamp), timeRange));
 
-  if (vis.likes) {
-    datasets.push({
-      label: 'Likes',
-      data: snapshots.map(s => s.likes || 0),
-      borderColor: CHART_COLORS.likes,
-      borderWidth: 1.5,
-      tension: 0,
-      fill: false,
-      pointRadius: 0,
-      pointHoverRadius: 3
+    const barDataset = (key, label, stack) => ({
+      label,
+      data: buckets.map(b => b[key] || 0),
+      backgroundColor: CHART_COLORS[key],
+      stack,
+      borderColor: CHART_SURFACE,
+      borderWidth: 1,
+      borderSkipped: false,
+      borderRadius: 2,
+      maxBarThickness: 20
     });
-  }
-
-  if (vis.hearts) {
-    datasets.push({
-      label: 'Hearts',
-      data: snapshots.map(s => s.hearts || 0),
-      borderColor: CHART_COLORS.hearts,
-      borderWidth: 1.5,
+    const lineDataset = (key, label, width) => ({
+      label,
+      data: buckets.map(b => b[key] || 0),
+      borderColor: CHART_COLORS[key],
+      borderWidth: width,
       tension: 0,
       fill: false,
       pointRadius: 0,
       pointHoverRadius: 3
     });
-  }
 
-  if (vis.laughs) {
-    datasets.push({
-      label: 'Laughs',
-      data: snapshots.map(s => s.laughs || 0),
-      borderColor: CHART_COLORS.laughs,
-      borderWidth: 1.5,
+    if (!stacked && vis.total) {
+      datasets.push(lineDataset('total', 'Total', 2));
+      datasets[datasets.length - 1].data =
+        buckets.map(b => (b.likes || 0) + (b.hearts || 0) + (b.laughs || 0) + (b.cries || 0));
+    }
+    for (const [key, label] of REACTION_SERIES) {
+      if (!vis[key]) continue;
+      datasets.push(stacked ? barDataset(key, label, 'reactions') : lineDataset(key, label, 1.5));
+    }
+    for (const [key, label] of EXTRA_SERIES) {
+      if (!vis[key]) continue;
+      datasets.push(stacked ? barDataset(key, label, key) : lineDataset(key, label, 1.5));
+    }
+  } else if (chartType === 'bar') {
+    labels = inRange.map(s => formatChartDate(new Date(s.timestamp), timeRange));
+    const push = (key, label) => datasets.push({
+      label,
+      data: inRange.map(s => key === 'total' ? getTotalReactions(s) : (s[key] || 0)),
+      backgroundColor: CHART_COLORS[key],
+      borderColor: CHART_SURFACE,
+      borderWidth: 1,
+      borderSkipped: false,
+      borderRadius: 2,
+      maxBarThickness: 20
+    });
+    if (vis.total) push('total', 'Total');
+    for (const [key, label] of [...REACTION_SERIES, ...EXTRA_SERIES]) {
+      if (vis[key]) push(key, label);
+    }
+  } else {
+    // Cumulative stepped lines on a true time axis
+    const push = (key, label, width) => datasets.push({
+      label,
+      data: inRange.map(s => ({
+        x: new Date(s.timestamp).getTime(),
+        y: key === 'total' ? getTotalReactions(s) : (s[key] || 0)
+      })),
+      borderColor: CHART_COLORS[key],
+      borderWidth: width,
+      stepped: 'before',
       tension: 0,
       fill: false,
       pointRadius: 0,
       pointHoverRadius: 3
     });
+    if (vis.total) push('total', 'Total', 2);
+    for (const [key, label] of [...REACTION_SERIES, ...EXTRA_SERIES]) {
+      if (vis[key]) push(key, label, 1.5);
+    }
   }
 
-  if (vis.cries) {
-    datasets.push({
-      label: 'Cries',
-      data: snapshots.map(s => s.cries || 0),
-      borderColor: CHART_COLORS.cries,
-      borderWidth: 1.5,
-      tension: 0,
-      fill: false,
-      pointRadius: 0,
-      pointHoverRadius: 3
-    });
-  }
-
-  if (vis.buzz) {
-    datasets.push({
-      label: 'Buzz',
-      data: snapshots.map(s => s.buzz || 0),
-      borderColor: CHART_COLORS.buzz,
-      borderWidth: 1.5,
-      tension: 0,
-      fill: false,
-      pointRadius: 0,
-      pointHoverRadius: 3
-    });
-  }
-
-  if (vis.collects) {
-    datasets.push({
-      label: 'Collects',
-      data: snapshots.map(s => s.collects || 0),
-      borderColor: CHART_COLORS.collects,
-      borderWidth: 1.5,
-      tension: 0,
-      fill: false,
-      pointRadius: 0,
-      pointHoverRadius: 3
-    });
-  }
-
-  const chartType = getEffectiveChartType(timeRange, imageChartTypes.get(image.id));
+  const xScale = timeAxis
+    ? {
+        type: 'linear',
+        display: false,
+        min: timeRange === 'all' ? undefined : Date.now() - TIME_RANGE_MS[timeRange],
+        max: timeRange === 'all' ? undefined : Date.now()
+      }
+    : { display: false, stacked };
 
   const chart = new Chart(ctx, {
     type: chartType,
@@ -1021,11 +1377,19 @@ function renderImageChart(image, timeRange) {
           backgroundColor: '#25262b',
           titleColor: '#fff',
           bodyColor: '#c1c2c5',
+          footerColor: '#fff',
           borderColor: '#373a40',
           borderWidth: 1,
           padding: 8,
           displayColors: true,
           callbacks: {
+            title: function(items) {
+              if (!items.length) return '';
+              if (timeAxis) {
+                return formatDate(new Date(items[0].parsed.x));
+              }
+              return items[0].label;
+            },
             label: function(context) {
               const emoji = LABEL_EMOJI[context.dataset.label] || context.dataset.label;
               const value = context.parsed.y.toLocaleString();
@@ -1035,22 +1399,29 @@ function renderImageChart(image, timeRange) {
               const idx = context.dataIndex;
               let delta = '';
               if (idx > 0) {
-                const prev = context.dataset.data[idx - 1];
+                const prevPoint = context.dataset.data[idx - 1];
+                const prev = (prevPoint && typeof prevPoint === 'object') ? prevPoint.y : prevPoint;
                 const diff = context.parsed.y - prev;
                 if (diff !== 0) {
                   delta = ` (${diff >= 0 ? '+' : ''}${diff.toLocaleString()})`;
                 }
               }
               return `${emoji}: ${value}${delta}`;
+            },
+            footer: function(items) {
+              if (!stacked) return '';
+              const total = items
+                .filter(i => i.dataset.stack === 'reactions')
+                .reduce((sum, i) => sum + i.parsed.y, 0);
+              return total > 0 ? `Total: +${total.toLocaleString()}` : '';
             }
           }
         }
       },
       scales: {
-        x: {
-          display: false
-        },
+        x: xScale,
         y: {
+          stacked,
           grid: {
             color: 'rgba(55, 58, 64, 0.3)',
             drawBorder: false
@@ -1319,6 +1690,11 @@ function createImageCard(image) {
           </div>
         </div>
       </div>
+      ${hasSnapshots ? `
+        <div class="image-sparkline-wrap">
+          <canvas id="spark-${escapeHtml(image.id)}"></canvas>
+        </div>
+      ` : ''}
       ${hasSnapshots ? `
         <button class="image-chart-toggle" data-image-id="${escapeHtml(image.id)}">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
