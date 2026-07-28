@@ -48,31 +48,10 @@ function isDeltaMode(timeRange) {
 }
 
 /**
- * Compute deltas from resolved (absolute) snapshots.
- * Each point becomes the difference from the previous point.
- * Negative deltas are clamped to 0 (API caching artifacts).
- * The first point is dropped (no previous to diff against).
+ * computeDeltas comes from the shared snapshot codec (../lib/snapshot-codec.js,
+ * loaded by stats.html before this file) — the same code the collector uses.
  */
-function computeDeltas(snapshots) {
-  if (!snapshots || snapshots.length < 2) return [];
-  const result = [];
-  for (let i = 1; i < snapshots.length; i++) {
-    const prev = snapshots[i - 1];
-    const curr = snapshots[i];
-    result.push({
-      timestamp: curr.timestamp,
-      likes: Math.max(0, (curr.likes || 0) - (prev.likes || 0)),
-      hearts: Math.max(0, (curr.hearts || 0) - (prev.hearts || 0)),
-      laughs: Math.max(0, (curr.laughs || 0) - (prev.laughs || 0)),
-      cries: Math.max(0, (curr.cries || 0) - (prev.cries || 0)),
-      comments: Math.max(0, (curr.comments || 0) - (prev.comments || 0)),
-      buzz: Math.max(0, (curr.buzz || 0) - (prev.buzz || 0)),
-      collects: Math.max(0, (curr.collects || 0) - (prev.collects || 0)),
-      views: Math.max(0, (curr.views || 0) - (prev.views || 0))
-    });
-  }
-  return result;
-}
+const computeDeltas = SnapshotCodec.computeDeltas;
 
 /**
  * Get effective chart type based on time range and user override.
@@ -84,43 +63,9 @@ function getEffectiveChartType(timeRange, override) {
 }
 
 /**
- * Resolve delta-encoded snapshots back to absolute values.
- * Absolute snapshots pass through unchanged; delta snapshots (with d* keys)
- * are accumulated on top of the previous absolute values.
+ * resolveSnapshots (delta -> absolute) also comes from the shared codec.
  */
-function resolveSnapshots(snapshots) {
-  if (!snapshots || snapshots.length === 0) return [];
-  const result = [];
-  let current = { likes: 0, hearts: 0, laughs: 0, cries: 0, comments: 0, buzz: 0, collects: 0, views: 0 };
-
-  for (const s of snapshots) {
-    if ('dl' in s || 'dh' in s || 'dla' in s || 'dc' in s || 'dco' in s || '_d' in s || 'dbu' in s || 'dcol' in s || 'dvi' in s) {
-      current = {
-        likes: current.likes + (s.dl || 0),
-        hearts: current.hearts + (s.dh || 0),
-        laughs: current.laughs + (s.dla || 0),
-        cries: current.cries + (s.dc || 0),
-        comments: current.comments + (s.dco || 0),
-        buzz: current.buzz + (s.dbu || 0),
-        collects: current.collects + (s.dcol || 0),
-        views: current.views + (s.dvi || 0)
-      };
-    } else {
-      current = {
-        likes: s.likes || 0,
-        hearts: s.hearts || 0,
-        laughs: s.laughs || 0,
-        cries: s.cries || 0,
-        comments: s.comments || 0,
-        buzz: s.buzz || 0,
-        collects: s.collects || 0,
-        views: s.views || 0
-      };
-    }
-    result.push({ timestamp: s.timestamp, ...current });
-  }
-  return result;
-}
+const resolveSnapshots = SnapshotCodec.resolveAll;
 
 // Default colors matching Civitai's palette
 const DEFAULT_CHART_COLORS = {

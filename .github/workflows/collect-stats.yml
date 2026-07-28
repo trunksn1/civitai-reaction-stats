@@ -44,6 +44,9 @@ jobs:
       - name: Install dependencies
         run: cd scripts && npm ci
 
+      - name: Run codec tests
+        run: cd scripts && npm test
+
       - name: Fetch and update stats
         run: node scripts/fetch-stats.js
         env:

@@ -1,4 +1,15 @@
 import { Octokit } from '@octokit/rest';
+// Shared snapshot codec — same file the extension loads (single source of truth
+// for the delta format). Lives under extension/lib/ because Chrome cannot load
+// files from outside the extension root.
+import SnapshotCodec from '../extension/lib/snapshot-codec.js';
+
+const {
+  isDelta,
+  resolveAt: resolveSnapshot,
+  resolveAll: resolveAllSnapshots,
+  encodeAsDeltas
+} = SnapshotCodec;
 
 // Environment variables
 const GIST_ID = process.env.GIST_ID;
@@ -647,119 +658,9 @@ function applyRetentionPolicy(snapshots) {
   return result;
 }
 
-/**
- * Check if a snapshot is delta-encoded (has any d* keys)
- */
-function isDelta(snapshot) {
-  return snapshot && ('dl' in snapshot || 'dh' in snapshot ||
-         'dla' in snapshot || 'dc' in snapshot || 'dco' in snapshot ||
-         'dbu' in snapshot || 'dcol' in snapshot || 'dvi' in snapshot || '_d' in snapshot);
-}
-
-/**
- * Resolve a single snapshot at a given index to absolute values
- * by walking backward to find the nearest absolute snapshot and applying deltas forward
- */
-function resolveSnapshot(snapshots, index) {
-  let base = { likes: 0, hearts: 0, laughs: 0, cries: 0, comments: 0, buzz: 0, collects: 0, views: 0 };
-  let startIdx = 0;
-
-  for (let i = index; i >= 0; i--) {
-    if (!isDelta(snapshots[i])) {
-      base = {
-        likes: snapshots[i].likes || 0,
-        hearts: snapshots[i].hearts || 0,
-        laughs: snapshots[i].laughs || 0,
-        cries: snapshots[i].cries || 0,
-        comments: snapshots[i].comments || 0,
-        buzz: snapshots[i].buzz || 0,
-        collects: snapshots[i].collects || 0,
-        views: snapshots[i].views || 0
-      };
-      startIdx = i + 1;
-      break;
-    }
-  }
-
-  for (let i = startIdx; i <= index; i++) {
-    const s = snapshots[i];
-    if (isDelta(s)) {
-      base.likes += s.dl || 0;
-      base.hearts += s.dh || 0;
-      base.laughs += s.dla || 0;
-      base.cries += s.dc || 0;
-      base.comments += s.dco || 0;
-      base.buzz += s.dbu || 0;
-      base.collects += s.dcol || 0;
-      base.views += s.dvi || 0;
-    }
-  }
-
-  return { timestamp: snapshots[index].timestamp, ...base };
-}
-
-/**
- * Resolve all snapshots in an array to absolute values
- */
-function resolveAllSnapshots(snapshots) {
-  const result = [];
-  let current = { likes: 0, hearts: 0, laughs: 0, cries: 0, comments: 0, buzz: 0, collects: 0, views: 0 };
-
-  for (const s of snapshots) {
-    if (isDelta(s)) {
-      current = {
-        likes: current.likes + (s.dl || 0),
-        hearts: current.hearts + (s.dh || 0),
-        laughs: current.laughs + (s.dla || 0),
-        cries: current.cries + (s.dc || 0),
-        comments: current.comments + (s.dco || 0),
-        buzz: current.buzz + (s.dbu || 0),
-        collects: current.collects + (s.dcol || 0),
-        views: current.views + (s.dvi || 0)
-      };
-    } else {
-      current = {
-        likes: s.likes || 0,
-        hearts: s.hearts || 0,
-        laughs: s.laughs || 0,
-        cries: s.cries || 0,
-        comments: s.comments || 0,
-        buzz: s.buzz || 0,
-        collects: s.collects || 0,
-        views: s.views || 0
-      };
-    }
-    result.push({ timestamp: s.timestamp, ...current });
-  }
-  return result;
-}
-
-/**
- * Encode an array of absolute snapshots as deltas (first stays absolute, rest become deltas)
- */
-function encodeAsDeltas(absoluteSnapshots) {
-  if (absoluteSnapshots.length === 0) return [];
-  const result = [absoluteSnapshots[0]];
-  for (let i = 1; i < absoluteSnapshots.length; i++) {
-    const prev = absoluteSnapshots[i - 1];
-    const curr = absoluteSnapshots[i];
-    const delta = { timestamp: curr.timestamp };
-    if (curr.likes - prev.likes) delta.dl = curr.likes - prev.likes;
-    if (curr.hearts - prev.hearts) delta.dh = curr.hearts - prev.hearts;
-    if (curr.laughs - prev.laughs) delta.dla = curr.laughs - prev.laughs;
-    if (curr.cries - prev.cries) delta.dc = curr.cries - prev.cries;
-    if (curr.comments - prev.comments) delta.dco = curr.comments - prev.comments;
-    if (curr.buzz - prev.buzz) delta.dbu = curr.buzz - prev.buzz;
-    if (curr.collects - prev.collects) delta.dcol = curr.collects - prev.collects;
-    if (curr.views - prev.views) delta.dvi = curr.views - prev.views;
-    // Mark as delta even when all changes are zero, so resolvers don't mistake it for absolute
-    if (!delta.dl && !delta.dh && !delta.dla && !delta.dc && !delta.dco && !delta.dbu && !delta.dcol && !delta.dvi) {
-      delta._d = 1;
-    }
-    result.push(delta);
-  }
-  return result;
-}
+// Snapshot delta helpers (isDelta / resolveSnapshot / resolveAllSnapshots /
+// encodeAsDeltas) come from the shared codec imported at the top of this file:
+// extension/lib/snapshot-codec.js — one FIELDS table, used by collector AND extension.
 
 /**
  * Process images and create current snapshot

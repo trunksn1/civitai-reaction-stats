@@ -34,10 +34,10 @@ All in `scripts/fetch-stats.js` unless noted.
 
 | # | Task | Detail | Size |
 |---|------|--------|------|
-| 2.1 | Create `shared/snapshot-codec.js` | Single source of truth: `FIELDS` table (`likes↔dl`, `hearts↔dh`, …), `isDelta()`, `resolveAll()`, `resolveLast()`, `encodeAsDeltas()`, `computeDeltas()` (clamped). Plain ESM, no deps. | M |
-| 2.2 | Use it in the collector | Replace `isDelta` / `resolveSnapshot` / `resolveAllSnapshots` / `encodeAsDeltas` in `fetch-stats.js`. `scripts/package.json` gets a relative import (or copy step). | M |
-| 2.3 | Use it in the extension | Replace `resolveSnapshots`, inline delta detection and `computeDeltas` in `extension/stats-page/stats.js`. Extension has no bundler: include `shared/snapshot-codec.js` as a plain script before `stats.js` (expose a global) — keep it dual-mode (ESM export + `globalThis` fallback). | M |
-| 2.4 | Codec tests | Add `scripts/test-codec.js` (plain node asserts, no framework): round-trip encode/decode, `_d` marker, zero-delta runs, unknown-key tolerance. Run in CI before collect. | M |
+| 2.1 | ✅ Create `shared/snapshot-codec.js` | Single source of truth: `FIELDS` table (`likes↔dl`, `hearts↔dh`, …), `isDelta()`, `resolveAll()`, `resolveLast()`, `encodeAsDeltas()`, `computeDeltas()` (clamped). Plain ESM, no deps. | M |
+| 2.2 | ✅ Use it in the collector | Replace `isDelta` / `resolveSnapshot` / `resolveAllSnapshots` / `encodeAsDeltas` in `fetch-stats.js`. `scripts/package.json` gets a relative import (or copy step). | M |
+| 2.3 | ✅ Use it in the extension | Replace `resolveSnapshots`, inline delta detection and `computeDeltas` in `extension/stats-page/stats.js`. Extension has no bundler: include `shared/snapshot-codec.js` as a plain script before `stats.js` (expose a global) — keep it dual-mode (ESM export + `globalThis` fallback). | M |
+| 2.4 | ✅ Codec tests | Add `scripts/test-codec.js` (plain node asserts, no framework): round-trip encode/decode, `_d` marker, zero-delta runs, unknown-key tolerance. Run in CI before collect. | M |
 
 *Adding any future stat field then means one entry in `FIELDS`.*
 
