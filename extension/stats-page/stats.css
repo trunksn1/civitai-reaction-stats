@@ -423,6 +423,7 @@ body {
 .toggle-dot.hearts { background-color: var(--color-hearts); }
 .toggle-dot.laughs { background-color: var(--color-laughs); }
 .toggle-dot.cries { background-color: var(--color-cries); }
+.toggle-dot.comments { background-color: var(--color-comments); }
 .toggle-dot.buzz { background-color: var(--color-buzz); }
 .toggle-dot.collects { background-color: var(--color-collects); }
 

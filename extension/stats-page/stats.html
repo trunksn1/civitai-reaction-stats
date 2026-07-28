@@ -214,6 +214,11 @@
                 &#x1F622;
               </label>
               <label class="toggle-label">
+                <input type="checkbox" data-line="comments">
+                <span class="toggle-dot comments"></span>
+                &#x1F4AC;
+              </label>
+              <label class="toggle-label">
                 <input type="checkbox" data-line="buzz">
                 <span class="toggle-dot buzz"></span>
                 &#x26A1;
@@ -281,7 +286,15 @@
       <section class="card chart-section images-timeline-section">
         <div class="chart-header">
           <h2>Reactions Timeline</h2>
-          <span class="widget-sub">each colored band is one image — top 12 by reactions, rest as "Other"</span>
+          <span class="widget-sub" id="timelineSub">each colored band is one image — top 12 by reactions, rest as "Other"</span>
+          <div class="time-selector" id="timelineRangeSelector">
+            <button class="time-btn" data-range="1d">1D</button>
+            <button class="time-btn" data-range="7d">7D</button>
+            <button class="time-btn" data-range="30d">30D</button>
+            <button class="time-btn" data-range="90d">90D</button>
+            <button class="time-btn" data-range="1y">1Y</button>
+            <button class="time-btn active" data-range="all">All</button>
+          </div>
         </div>
         <div class="chart-container">
           <canvas id="imagesTimelineChart"></canvas>
@@ -329,6 +342,10 @@
             <label class="toggle-label">
               <input type="checkbox" data-line="cries">
               <span class="toggle-dot cries"></span>&#x1F622;
+            </label>
+            <label class="toggle-label">
+              <input type="checkbox" data-line="comments">
+              <span class="toggle-dot comments"></span>&#x1F4AC;
             </label>
             <label class="toggle-label">
               <input type="checkbox" data-line="buzz">

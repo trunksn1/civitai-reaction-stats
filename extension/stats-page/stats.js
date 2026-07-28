@@ -21,9 +21,11 @@ let visibleLines = {
   hearts: true,
   laughs: false,
   cries: false,
+  comments: false,
   buzz: false,
   collects: false
 };
+let timelineRange = 'all'; // Images-tab Reactions Timeline window
 let displayedImages = 10;
 const IMAGES_PER_PAGE = 10;
 
@@ -51,7 +53,7 @@ const CHART_SURFACE = '#25262b';
 const imageCharts = new Map(); // Map<imageId, Chart>
 const imageTimeRanges = new Map(); // Map<imageId, timeRange>
 const sparklineCharts = new Map(); // Map<imageId, Chart>
-let imageLineVisibility = { total: true, likes: true, hearts: true, laughs: false, cries: false, buzz: false, collects: false };
+let imageLineVisibility = { total: true, likes: true, hearts: true, laughs: false, cries: false, comments: false, buzz: false, collects: false };
 
 // Emoji labels for chart tooltips
 const LABEL_EMOJI = {
@@ -60,6 +62,7 @@ const LABEL_EMOJI = {
   'Hearts': '\u2764\uFE0F',  // ❤️
   'Laughs': '\u{1F604}',     // 😄
   'Cries': '\u{1F622}',      // 😢
+  'Comments': '💬',
   'Buzz': '\u26A1',           // ⚡
   'Collects': '\u{1F516}'    // 🔖
 };
@@ -109,6 +112,50 @@ function bucketedDeltas(resolvedSnapshots, timeRange) {
   }
 
   return buckets;
+}
+
+/**
+ * Re-baseline a RESOLVED series to a bounded time window: every field becomes
+ * "gained since the window start" (value minus the last value at or before the
+ * start; 0 with no prior history), clamped at 0. A 7d chart therefore starts
+ * at 0 and shows the week's growth instead of zooming a 51k cumulative wall.
+ * Adds an anchor point at the window start and a terminal point at now so
+ * stepped lines span the full window. Returns the input unchanged for 'all'.
+ */
+function rebaseWindow(resolvedSnapshots, timeRange) {
+  if (timeRange === 'all' || !TIME_RANGE_MS[timeRange]) return resolvedSnapshots;
+
+  const start = Date.now() - TIME_RANGE_MS[timeRange];
+  let baseline = null;
+  const windowed = [];
+  for (const s of resolvedSnapshots) {
+    if (new Date(s.timestamp).getTime() <= start) {
+      baseline = s;
+    } else {
+      windowed.push(s);
+    }
+  }
+
+  const base = {};
+  for (const [key] of SnapshotCodec.FIELDS) base[key] = baseline ? (baseline[key] || 0) : 0;
+
+  const out = [];
+  const anchor = { timestamp: new Date(start).toISOString() };
+  for (const [key] of SnapshotCodec.FIELDS) anchor[key] = 0;
+  out.push(anchor);
+
+  for (const s of windowed) {
+    const r = { timestamp: s.timestamp };
+    for (const [key] of SnapshotCodec.FIELDS) r[key] = Math.max(0, (s[key] || 0) - base[key]);
+    out.push(r);
+  }
+
+  // Terminal point: hold the last value through to "now"
+  const last = out[out.length - 1];
+  const terminal = { ...last, timestamp: new Date().toISOString() };
+  out.push(terminal);
+
+  return out;
 }
 
 /**
@@ -173,13 +220,23 @@ function setupEventListeners() {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab));
   });
 
-  // Time range selector
-  document.querySelectorAll('.time-btn').forEach(btn => {
+  // Time range selector (Trends chart only — the Images timeline has its own)
+  document.querySelectorAll('#tab-trends .time-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.time-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('#tab-trends .time-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       currentTimeRange = btn.dataset.range;
       updateChart();
+    });
+  });
+
+  // Images timeline range selector
+  document.querySelectorAll('#timelineRangeSelector .time-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#timelineRangeSelector .time-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      timelineRange = btn.dataset.range;
+      renderImagesTimeline();
     });
   });
 
@@ -806,9 +863,12 @@ function renderChart() {
   // Update chart title
   const titleEl = document.getElementById('chartTitle');
   if (titleEl) {
+    const bounded = currentTimeRange !== 'all';
     titleEl.textContent = deltaMode
       ? 'Reactions Gained'
-      : (isArea ? 'Reactions Over Time — stacked' : 'Reactions Over Time');
+      : bounded
+        ? (isArea ? 'Gained This Period — stacked' : 'Gained This Period — running total')
+        : (isArea ? 'Reactions Over Time — stacked' : 'Reactions Over Time');
   }
 
   const xScale = timeAxis
@@ -883,10 +943,12 @@ function renderChart() {
               // In stacked modes the stack is the total — surface it.
               if (!stacked) return '';
               const total = items
-                .filter(i => i.dataset.stack === 'reactions')
+                .filter(i => i.dataset.stack === 'reactions' || i.dataset.stack === 'shown')
                 .reduce((sum, i) => sum + i.parsed.y, 0);
               if (total <= 0) return '';
-              return deltaMode ? `Total: +${total.toLocaleString()}` : `Total: ${total.toLocaleString()}`;
+              const gained = deltaMode || currentTimeRange !== 'all';
+              const word = isArea ? 'Shown' : 'Total';
+              return `${word}: ${gained ? '+' : ''}${total.toLocaleString()}`;
             }
           }
         }
@@ -940,16 +1002,19 @@ function getChartData() {
     ['cries', 'Cries']
   ];
   const EXTRA_SERIES = [
+    ['comments', 'Comments'],
     ['buzz', 'Buzz'],
     ['collects', 'Collects']
   ];
 
   if (chartType === 'area') {
-    // AoE2-style stacked area: the four reaction types as stacked bands over
-    // time; total height = total reactions. Always cumulative.
-    const resolved = filterByTimeRange(resolvedFull);
+    // AoE2-style stacked area. Every toggled-on series (reactions, comments,
+    // buzz, collects) becomes a band; the stack height is the sum of what's
+    // shown. Bounded ranges are re-baselined to 0 at the window start
+    // ("gained this period"); 'all' shows absolute history.
+    const resolved = rebaseWindow(resolvedFull, currentTimeRange);
     const datasets = [];
-    for (const [key, label] of REACTION_SERIES) {
+    for (const [key, label] of [...REACTION_SERIES, ...EXTRA_SERIES]) {
       if (!visibleLines[key]) continue;
       datasets.push({
         label,
@@ -960,7 +1025,27 @@ function getChartData() {
         stepped: 'before',
         tension: 0,
         fill: true,
-        stack: 'reactions',
+        stack: 'shown',
+        pointRadius: 0,
+        pointHoverRadius: 4
+      });
+    }
+    // Total (the 4 reaction types) rides on top as a line in its own stack —
+    // as a band it would double-count the stack. Useful when some bands are
+    // toggled off: the line still shows the true reaction total.
+    if (visibleLines.total) {
+      datasets.push({
+        label: 'Total',
+        data: resolved.map(s => ({
+          x: new Date(s.timestamp).getTime(),
+          y: (s.likes || 0) + (s.hearts || 0) + (s.laughs || 0) + (s.cries || 0)
+        })),
+        borderColor: CHART_COLORS.total,
+        borderWidth: 2,
+        stepped: 'before',
+        tension: 0,
+        fill: false,
+        stack: '__total',
         pointRadius: 0,
         pointHoverRadius: 4
       });
@@ -1027,8 +1112,9 @@ function getChartData() {
     return { labels, datasets, stacked };
   }
 
-  // Cumulative mode.
-  const resolved = filterByTimeRange(resolvedFull);
+  // Cumulative mode. Bounded ranges are re-baselined to 0 at the window start
+  // (running gains over the window); 'all' shows the absolute history.
+  const resolved = rebaseWindow(resolvedFull, currentTimeRange);
 
   if (chartType === 'bar') {
     // Rarely used override: cumulative bars on evenly spaced snapshot labels.
@@ -1139,30 +1225,57 @@ function renderImagesTimeline() {
     imagesTimelineChart = null;
   }
 
+  const bounded = timelineRange !== 'all';
+  const subEl = document.getElementById('timelineSub');
+
   const entries = (statsData.images || [])
     .map(image => ({ image, resolved: resolveSnapshots(image.snapshots || []) }))
-    .filter(e => e.resolved.length > 0)
-    .sort((a, b) =>
-      getTotalReactions(b.resolved[b.resolved.length - 1]) -
-      getTotalReactions(a.resolved[a.resolved.length - 1]));
+    .filter(e => e.resolved.length > 0);
 
   if (entries.length === 0) return;
 
-  // Even time grid from the earliest snapshot to now
+  // Even time grid across the selected window (or the full history for 'all')
   let minT = Infinity;
   for (const e of entries) {
     minT = Math.min(minT, new Date(e.resolved[0].timestamp).getTime());
   }
   const maxT = Date.now();
-  if (!isFinite(minT) || maxT <= minT) return;
+  const start = bounded ? maxT - TIME_RANGE_MS[timelineRange] : minT;
+  if (!isFinite(start) || maxT <= start) return;
 
   const POINTS = 120;
-  const step = (maxT - minT) / (POINTS - 1);
+  const step = (maxT - start) / (POINTS - 1);
   const gridTimes = [];
-  for (let k = 0; k < POINTS; k++) gridTimes.push(minT + k * step);
+  for (let k = 0; k < POINTS; k++) gridTimes.push(start + k * step);
+
+  // Sample every image on the grid; bounded windows re-baseline each image to
+  // 0 at the window start so the mountain shows GAINS over the window, not a
+  // zoomed slice of a 50k cumulative wall.
+  for (const e of entries) {
+    const sampled = sampleStepSeries(e.resolved, gridTimes);
+    e.values = bounded ? sampled.map(v => Math.max(0, v - sampled[0])) : sampled;
+  }
+
+  // Rank by final value in the window (bounded = gain; all = total)
+  let ranked = entries.sort((a, b) =>
+    b.values[b.values.length - 1] - a.values[a.values.length - 1]);
+  if (bounded) {
+    ranked = ranked.filter(e => e.values[e.values.length - 1] > 0);
+  }
+
+  if (subEl) {
+    subEl.textContent = bounded
+      ? `each colored band is one image — ranked by reactions gained in this window`
+      : 'each colored band is one image — top 12 by total reactions, rest as "Other"';
+  }
+
+  if (ranked.length === 0) {
+    if (subEl) subEl.textContent = 'no reactions gained in this window';
+    return;
+  }
 
   // Label format adapted to the covered span
-  const span = maxT - minT;
+  const span = maxT - start;
   const fmtKey = span <= TIME_RANGE_MS['1d'] ? '1d'
     : span <= TIME_RANGE_MS['7d'] ? '7d'
     : span <= TIME_RANGE_MS['90d'] ? '30d'
@@ -1170,12 +1283,12 @@ function renderImagesTimeline() {
   const labels = gridTimes.map(t => formatChartDate(new Date(t), fmtKey));
 
   const TOP_N = TIMELINE_COLORS.length;
-  const top = entries.slice(0, TOP_N);
-  const rest = entries.slice(TOP_N);
+  const top = ranked.slice(0, TOP_N);
+  const rest = ranked.slice(TOP_N);
 
   const datasets = top.map((e, idx) => ({
     label: (e.image.name || `Image ${e.image.id}`).substring(0, 28),
-    data: sampleStepSeries(e.resolved, gridTimes),
+    data: e.values,
     borderColor: TIMELINE_COLORS[idx],
     backgroundColor: TIMELINE_COLORS[idx] + 'D0',
     borderWidth: 1,
@@ -1188,8 +1301,7 @@ function renderImagesTimeline() {
   if (rest.length > 0) {
     const otherValues = new Array(gridTimes.length).fill(0);
     for (const e of rest) {
-      const sampled = sampleStepSeries(e.resolved, gridTimes);
-      for (let k = 0; k < otherValues.length; k++) otherValues[k] += sampled[k];
+      for (let k = 0; k < otherValues.length; k++) otherValues[k] += e.values[k];
     }
     datasets.push({
       label: `Other (${rest.length} images)`,
@@ -1234,10 +1346,14 @@ function renderImagesTimeline() {
           filter: item => item.parsed.y > 0,
           itemSort: (a, b) => b.parsed.y - a.parsed.y,
           callbacks: {
-            label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toLocaleString()}`,
+            label: ctx => {
+              const prefix = bounded ? '+' : '';
+              return `${ctx.dataset.label}: ${prefix}${ctx.parsed.y.toLocaleString()}`;
+            },
             footer: items => {
               const total = items.reduce((sum, i) => sum + i.parsed.y, 0);
-              return total > 0 ? `Total: ${total.toLocaleString()}` : '';
+              if (total <= 0) return '';
+              return `Total: ${bounded ? '+' : ''}${total.toLocaleString()}`;
             }
           }
         }
@@ -1462,27 +1578,48 @@ function renderImageChart(image, timeRange) {
     ['cries', 'Cries']
   ];
   const EXTRA_SERIES = [
+    ['comments', 'Comments'],
     ['buzz', 'Buzz'],
     ['collects', 'Collects']
   ];
+
+  // Bounded ranges re-baseline cumulative views to 0 at the window start.
+  const windowed = rebaseWindow(resolvedFull, timeRange);
 
   let labels;
   const datasets = [];
 
   if (isArea) {
-    // AoE2-style stacked bands of this image's reaction types.
-    for (const [key, label] of REACTION_SERIES) {
+    // AoE2-style stacked bands of this image's series (reactions + extras).
+    for (const [key, label] of [...REACTION_SERIES, ...EXTRA_SERIES]) {
       if (!vis[key]) continue;
       datasets.push({
         label,
-        data: inRange.map(s => ({ x: new Date(s.timestamp).getTime(), y: s[key] || 0 })),
+        data: windowed.map(s => ({ x: new Date(s.timestamp).getTime(), y: s[key] || 0 })),
         borderColor: CHART_COLORS[key],
         backgroundColor: CHART_COLORS[key] + 'CC',
         borderWidth: 1,
         stepped: 'before',
         tension: 0,
         fill: true,
-        stack: 'reactions',
+        stack: 'shown',
+        pointRadius: 0,
+        pointHoverRadius: 3
+      });
+    }
+    if (vis.total) {
+      datasets.push({
+        label: 'Total',
+        data: windowed.map(s => ({
+          x: new Date(s.timestamp).getTime(),
+          y: (s.likes || 0) + (s.hearts || 0) + (s.laughs || 0) + (s.cries || 0)
+        })),
+        borderColor: CHART_COLORS.total,
+        borderWidth: 2,
+        stepped: 'before',
+        tension: 0,
+        fill: false,
+        stack: '__total',
         pointRadius: 0,
         pointHoverRadius: 3
       });
@@ -1527,10 +1664,10 @@ function renderImageChart(image, timeRange) {
       datasets.push(stacked ? barDataset(key, label, key) : lineDataset(key, label, 1.5));
     }
   } else if (chartType === 'bar') {
-    labels = inRange.map(s => formatChartDate(new Date(s.timestamp), timeRange));
+    labels = windowed.map(s => formatChartDate(new Date(s.timestamp), timeRange));
     const push = (key, label) => datasets.push({
       label,
-      data: inRange.map(s => key === 'total' ? getTotalReactions(s) : (s[key] || 0)),
+      data: windowed.map(s => key === 'total' ? getTotalReactions(s) : (s[key] || 0)),
       backgroundColor: CHART_COLORS[key],
       borderColor: CHART_SURFACE,
       borderWidth: 1,
@@ -1543,10 +1680,10 @@ function renderImageChart(image, timeRange) {
       if (vis[key]) push(key, label);
     }
   } else {
-    // Cumulative stepped lines on a true time axis
+    // Cumulative stepped lines on a true time axis (rebased for bounded ranges)
     const push = (key, label, width) => datasets.push({
       label,
-      data: inRange.map(s => ({
+      data: windowed.map(s => ({
         x: new Date(s.timestamp).getTime(),
         y: key === 'total' ? getTotalReactions(s) : (s[key] || 0)
       })),
@@ -1628,10 +1765,12 @@ function renderImageChart(image, timeRange) {
             footer: function(items) {
               if (!stacked) return '';
               const total = items
-                .filter(i => i.dataset.stack === 'reactions')
+                .filter(i => i.dataset.stack === 'reactions' || i.dataset.stack === 'shown')
                 .reduce((sum, i) => sum + i.parsed.y, 0);
               if (total <= 0) return '';
-              return deltaMode ? `Total: +${total.toLocaleString()}` : `Total: ${total.toLocaleString()}`;
+              const gained = deltaMode || timeRange !== 'all';
+              const word = isArea ? 'Shown' : 'Total';
+              return `${word}: ${gained ? '+' : ''}${total.toLocaleString()}`;
             }
           }
         }
