@@ -5,7 +5,7 @@
 
 const STATS_ITEM_ID = 'civitai-stats-menu-item';
 let observerActive = false;
-const DEBUG = true; // Enable debug logging
+const DEBUG = false; // Enable debug logging
 
 /**
  * Debug logger

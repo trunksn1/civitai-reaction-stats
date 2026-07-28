@@ -12,7 +12,7 @@ Legend: **[S]** small (<1h), **[M]** medium (half day), **[L]** large (multi-day
 
 | # | Task | Size |
 |---|------|------|
-| 0.1 | Move `analysis/` out of this repo (its weekly reaction-distribution study is a different project). Before deleting, extract the day-of-week × hour aggregation logic from `analysis/analyze-posting-times.js` into a note or util — it seeds feature 5.2. | S |
+| 0.1 | **Keep `analysis/` exactly where it is** (owner decision — do not delete or move). It's a weekly reaction-distribution study from another project and serves as prior art: its day-of-week × hour aggregation seeds feature 6.2. Optionally add a provenance note at the top of `analysis/README.md`. | S |
 | 0.2 | Set `DEBUG = false` in `extension/content/content.js`; gate future logging behind it. | S |
 | 0.3 | Remove unused `"scripting"` permission from `extension/manifest.json`. | S |
 
@@ -57,12 +57,22 @@ All in `scripts/fetch-stats.js` unless noted.
 | 4.2 | Fixed-interval delta buckets | Replace per-snapshot `computeDeltas` for bar charts with calendar bucketing (reuse/generalize `dailyActivity`): 1d → hourly buckets, 7d → 6h, 30d/90d → daily. Bars become comparable. | M |
 | 4.3 | Stacked delta bars | In delta mode, render likes/hearts/laughs/cries as a stacked bar (stack = total); drop the separate "Total" series there. Keep "Total" as a line only in cumulative mode, default-off. | M |
 | 4.4 | `civitai.red` support in extension | Add `https://civitai.red/*` to `host_permissions` + `content_scripts.matches` so the Stats menu also appears there. | S |
+| 4.5 | Stepped-line cumulative mode | Render cumulative lines with `stepped: 'before'` so sparse change-only snapshots don't draw invented slopes across silent gaps. Add a log-scale toggle for the "All" range. | S |
+| 4.6 | Declutter series defaults | Cumulative mode defaults to Total + likes + hearts visible; laughs/cries/buzz/collects opt-in. In stacked delta mode (4.3) hide the redundant Total series. | S |
+| 4.7 | Card sparklines | Always-visible total-reactions sparkline (no axes) on each image card and inside each summary tile; the full multi-series chart stays behind the expand. | M |
 
 ## Phase 5 — Extension-first architecture (share without GitHub Actions)
 
 The strategic phase. Goal: **install from Web Store → works**, no fork/gist/PAT.
 Rationale: stats are cumulative counters, so browser-open-only collection loses
 resolution, never totals.
+
+**Coexistence guarantee: this phase adds a mode, it does not replace anything.** The
+existing GitHub Actions + gist pipeline keeps running untouched and remains the owner's
+authoritative 24/7 dataset. The extension offers a data-source choice — *gist* (today's
+behavior, stays the default for anyone already configured), *local* (in-browser
+collection), or both side by side. A later optional feature can even merge the two
+histories (union by timestamp — safe because snapshots are cumulative).
 
 | # | Task | Detail | Size |
 |---|------|--------|------|
@@ -115,5 +125,6 @@ Phase 1 ─┼─► Phase 2 (codec) ─► Phase 3 (efficiency)
 2. **Firefox?** MV3 + alarms work there too with minor manifest tweaks — in scope or later?
 3. **History migration default** — when a gist-mode user switches to local mode, import
    automatically or on demand?
-4. **`analysis/` destination** — separate repo, or just archived in this repo's history
-   after 0.1?
+
+~~4. `analysis/` destination~~ — **resolved: it stays in this repo, untouched** (owner
+decision, 2026-07-28).

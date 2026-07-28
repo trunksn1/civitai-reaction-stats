@@ -117,12 +117,22 @@ fork, no gist, no PAT, no Actions.
 GitHub Actions then becomes the optional "24/7 fidelity" tier; gist sync becomes an
 optional export/backup/multi-device feature.
 
+**Important: the two modes coexist — this is not a replacement.** The existing Actions +
+gist pipeline keeps running exactly as configured today, and the gist remains the owner's
+authoritative 24/7 dataset. The extension simply gains a second data-source option:
+*gist* (today's behavior, unchanged), *local* (in-browser collection for users who never
+set up Actions), or both. An owner who already runs Actions loses nothing and changes
+nothing.
+
 Middle-ground alternatives for always-on collection without Actions: Cloudflare Worker
 cron triggers (free tier suffices) or Windows Task Scheduler running the existing script.
 
 ## 5. Are the charts right?
 
-Two real problems:
+Two questions here: are the charts *rendered correctly*, and are the chosen *chart types*
+right for the shape of the data? Taking them in order.
+
+### 5.1 Rendering correctness — two real problems
 
 1. **The x-axis lies about time.** Charts use category labels (formatted date strings),
    not a time scale — but the data is *deliberately* unevenly spaced (hourly ≤7d,
@@ -134,11 +144,48 @@ Two real problems:
    comparable. Fix: bucket deltas into fixed calendar intervals (hour for 1d, day for
    30d/90d) — `dailyActivity()` already does this correctly for the Overview widget.
 
-What's right: line for cumulative, bar for deltas, auto-switching by range, delta
-clamping, reaction-mix proportion bars, top movers.
+### 5.2 Chart *types* — view by view
 
-Minor: plotting "Total" on the same axis as its components is redundant — default it off,
-or use a stacked bar of the four reaction types in delta mode (the stack *is* the total).
+The general mapping for this project's data shapes:
+
+| Data shape | Right form |
+|---|---|
+| Trend of a cumulative counter over time | Line — ideally **stepped** line, since values only move at sample points |
+| Amount gained per period | Bar; **stacked** bar when the total decomposes into types |
+| Share-of-whole at one moment | Horizontal proportion bars (what you have — better than a pie) |
+| Ranking ("top images") | Ranked horizontal bars |
+| Intensity across a calendar | Heatmap (calendar or day-of-week × hour matrix) |
+| Distribution across images | Histogram / Pareto |
+
+Against that, each current view:
+
+- **Trends tab, cumulative mode (multi-line)** — *right family, three refinements.*
+  Line is correct for cumulative counters. But (a) with change-only snapshots, linear
+  interpolation draws a steady slope across a 3-week silent gap, implying growth that
+  didn't happen — a **stepped line** (`stepped: 'before'`) is the honest rendering for
+  sparse counter data; (b) 8 toggleable series is spaghetti — default to Total +
+  likes/hearts, rest opt-in; (c) on "All", early history is squashed flat by later
+  totals — offer a log-scale toggle.
+- **Trends tab, delta mode (grouped bars)** — *right type, wrong buckets* (see 5.1.2).
+  Once buckets are fixed, a **stacked** bar of the four reaction types is strictly
+  better than grouped bars + a separate "Total" series: the stack height *is* the
+  total, and composition is visible in the same mark.
+- **Reaction mix (proportion bars)** — *correct.* Horizontal labeled bars beat a pie for
+  four close-valued categories. Optional upgrade: a 100%-stacked area over time to show
+  how the mix *evolves*, which the single-moment bars can't.
+- **Overview daily activity (14-day bar)** — *correct* for two weeks. Beyond ~a month,
+  the right form is a **calendar heatmap** — bars stop being readable at 90+ columns.
+- **Top movers (ranked rows with bar fill)** — *correct.* Ranked horizontal bars are
+  exactly the form for "top N by gain".
+- **Per-image charts (8-series line, hidden behind Show Chart)** — *overkill where it
+  is.* The card-level question is "is this image moving?" — that's a **sparkline**
+  (single total line, no axes) shown *always* on the card; the full multi-series chart
+  belongs behind the expand for the rare deep-dive.
+- **Summary cards (stat tiles + today/7d deltas)** — *correct*; a tiny 7-day sparkline
+  inside each tile would add trend context at nearly zero cost.
+
+What's already right and should not change: line for cumulative, bar for deltas,
+auto-switching by range, delta clamping, no pie charts anywhere.
 
 ## 6. What else could be shown (data & fun)
 
@@ -169,12 +216,12 @@ Needing modest extra collection:
 
 `analysis/` (analyze-posting-times.js, viewer.html, ~11k lines) originated in a
 **different project**: a site-wide study of how reactions distribute across the week on
-Civitai, not tied to one user. It ended up in this repo by accident.
+Civitai, not tied to one user.
 
-It is still useful as *prior art* for the "best time to post" feature: its
-day-of-week × hour aggregation logic is exactly the shape needed. Plan: port the
-aggregation approach into the extension (fed by this project's own per-user snapshot
-deltas), then remove the folder from this repo (or move it to its own repo).
+**The folder stays in this repo — do not delete it.** It is valuable prior art for the
+"best time to post" feature: its day-of-week × hour aggregation logic is exactly the
+shape needed, fed by this project's own per-user snapshot deltas instead of site-wide
+data. If it ever moves to its own repo, that's the owner's call, made separately.
 
 ## Bottom line
 

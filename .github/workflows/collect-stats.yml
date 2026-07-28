@@ -15,6 +15,16 @@ on:
           - daily
           - monthly
           - quarterly
+      reset-image-ids:
+        description: 'Comma-separated image IDs whose never-decrease clamp is bypassed this run (fixes inflated stats)'
+        required: false
+        default: ''
+
+# A slow run (e.g. quarterly refresh) must never overlap the next hourly run:
+# both would read the gist, then last-write-wins would silently drop a snapshot.
+concurrency:
+  group: collect-stats
+  cancel-in-progress: false
 
 jobs:
   collect:

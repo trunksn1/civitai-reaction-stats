@@ -3,7 +3,7 @@
   "name": "Civitai Reaction Stats",
   "version": "1.0.0",
   "description": "Track reaction statistics for your Civitai images over time",
-  "permissions": ["storage", "scripting"],
+  "permissions": ["storage"],
   "host_permissions": [
     "https://civitai.com/*",
     "https://gist.githubusercontent.com/*"
