@@ -103,7 +103,7 @@ Civitai issues a **single account-wide API key** (civitai.com → Account settin
 
 By default, the stats collector runs hourly with a smart tiered refresh system:
 - **Daily**: Refreshes images from last 30 days
-- **Monthly** (1st of month): Also refreshes images from 1-6 months ago
+- **Monthly** (1st of month, 00:00 UTC run only): Also refreshes images from 1-6 months ago
 - **Quarterly** (Jan/Apr/Jul/Oct 1st): Refreshes ALL images
 
 ### Force Full Refresh for All Images
@@ -209,8 +209,12 @@ The system uses a **smart tiered refresh strategy** to balance data freshness wi
 | Refresh Tier | When It Runs | What Gets Refreshed |
 |--------------|--------------|---------------------|
 | **Daily** | Every hour (default) | • Last 30 days of images<br>• Any images with 0 stats |
-| **Monthly** | 1st of each month | • Last 6 months of images<br>• Any images with 0 stats |
-| **Quarterly** | Jan 1, Apr 1, Jul 1, Oct 1 | • ALL images (complete refresh)<br>• Any images with 0 stats |
+| **Monthly** | 1st of each month (00:00 UTC run only) | • Last 6 months of images<br>• Older images stuck at 0 stats |
+| **Quarterly** | Jan 1, Apr 1, Jul 1, Oct 1 (00:00 UTC run only) | • ALL images (complete refresh) |
+
+**Note on 0-stat images:** images from the last 30 days are always refreshed hourly,
+including those at 0. Images older than 30 days that are still at 0 refresh on the
+monthly tier (they used to be re-fetched every hour forever).
 
 ### Why Tiered Refresh?
 
@@ -320,8 +324,22 @@ Civitai moved R-rated-and-harder content to a separate domain, `civitai.red`. Th
   2. Click "Run workflow" → select "quarterly" → Run
 - Check the Actions log to see which refresh tier was used
 
+### Fixing inflated stats (clamp reset)
+
+Stats are clamped to never decrease (protection against stale API data). The downside:
+if the API ever returns an inflated value once, the clamp bakes it in forever. To fix a
+specific image:
+
+1. Go to GitHub → Actions → Collect Civitai Stats → **Run workflow**
+2. In **reset-image-ids**, enter the affected image ID(s), comma-separated (e.g. `12345678,87654321`)
+3. Run the workflow
+
+For that one run, the listed images accept the API's fresh values as-is (allowed to
+decrease), and the total is recomputed without its own clamp. Afterwards the normal
+clamping resumes. Locally: `RESET_IMAGE_IDS=12345678 node fetch-stats.js` with the usual env vars.
+
 ### Some images have 0 reactions but I know they have stats
-- Images with 0 stats are always refreshed on every run
+- Images with 0 stats are refreshed hourly for their first 30 days, then monthly
 - The Civitai API sometimes returns incomplete data - this is handled by individual re-fetching
 - Force a quarterly refresh to update all images
 - Check if the image is published (scheduled/future-dated images are filtered out)

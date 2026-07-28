@@ -13,8 +13,8 @@ Legend: **[S]** small (<1h), **[M]** medium (half day), **[L]** large (multi-day
 | # | Task | Size |
 |---|------|------|
 | 0.1 | **Keep `analysis/` exactly where it is** (owner decision — do not delete or move). It's a weekly reaction-distribution study from another project and serves as prior art: its day-of-week × hour aggregation seeds feature 6.2. Optionally add a provenance note at the top of `analysis/README.md`. | S |
-| 0.2 | Set `DEBUG = false` in `extension/content/content.js`; gate future logging behind it. | S |
-| 0.3 | Remove unused `"scripting"` permission from `extension/manifest.json`. | S |
+| 0.2 | ✅ Set `DEBUG = false` in `extension/content/content.js`; gate future logging behind it. | S |
+| 0.3 | ✅ Remove unused `"scripting"` permission from `extension/manifest.json`. | S |
 
 ## Phase 1 — Correctness fixes (collector)
 
@@ -22,13 +22,13 @@ All in `scripts/fetch-stats.js` unless noted.
 
 | # | Task | Detail | Size |
 |---|------|--------|------|
-| 1.1 | Throw on 429 exhaustion | In `fetchWithRetry`, track that the loop can exit via the 429 path; after the final attempt `throw new Error('Rate limited after N retries: ' + url)` instead of falling through to `undefined`. | S |
-| 1.2 | Tier escalation only once per day | In `getRefreshTier()`, return `monthly`/`quarterly` only when `now.getUTCHours() === 0`; other hours on the 1st behave as `daily`. Manual override unchanged. | S |
-| 1.3 | Workflow concurrency group | Add `concurrency: { group: collect-stats, cancel-in-progress: false }` to `.github/workflows/collect-stats.yml`. | S |
-| 1.4 | Compact JSON output | `JSON.stringify(data)` (no indent) in `updateGist`. Log size before/after on first deploy to confirm the win. | S |
-| 1.5 | Real integrity check | Before merging, record `preMergeSnapshotCount` (sum over existing images). After merge+retention, require `postCount >= preCount - retentionRemoved` where `retentionRemoved` is counted by `applyRetentionPolicy` (return `{snapshots, removed}` or count at call sites). Abort on violation. | M |
-| 1.6 | Escape hatch for the ratchet | Add `RESET_IMAGE_IDS` env (comma-separated ids): for listed images, skip the `Math.max` clamp for one run so a corrupted inflated value can be corrected. Document in README troubleshooting. | M |
-| 1.7 | Demote permanently-zero images | If an image has 0 total reactions **and** `createdAt` older than 30 days, refresh it on the monthly tier only (instead of hourly forever). | S |
+| 1.1 | ✅ Throw on 429 exhaustion | In `fetchWithRetry`, track that the loop can exit via the 429 path; after the final attempt `throw new Error('Rate limited after N retries: ' + url)` instead of falling through to `undefined`. | S |
+| 1.2 | ✅ Tier escalation only once per day | In `getRefreshTier()`, return `monthly`/`quarterly` only when `now.getUTCHours() === 0`; other hours on the 1st behave as `daily`. Manual override unchanged. | S |
+| 1.3 | ✅ Workflow concurrency group | Add `concurrency: { group: collect-stats, cancel-in-progress: false }` to `.github/workflows/collect-stats.yml`. | S |
+| 1.4 | ✅ Compact JSON output | `JSON.stringify(data)` (no indent) in `updateGist`. Log size before/after on first deploy to confirm the win. | S |
+| 1.5 | ✅ Real integrity check | Before merging, record `preMergeSnapshotCount` (sum over existing images). After merge+retention, require `postCount >= preCount - retentionRemoved` where `retentionRemoved` is counted by `applyRetentionPolicy` (return `{snapshots, removed}` or count at call sites). Abort on violation. | M |
+| 1.6 | ✅ Escape hatch for the ratchet | Add `RESET_IMAGE_IDS` env (comma-separated ids): for listed images, skip the `Math.max` clamp for one run so a corrupted inflated value can be corrected. Document in README troubleshooting. | M |
+| 1.7 | ✅ Demote permanently-zero images | If an image has 0 total reactions **and** `createdAt` older than 30 days, refresh it on the monthly tier only (instead of hourly forever). | S |
 
 ## Phase 2 — Shared snapshot codec
 

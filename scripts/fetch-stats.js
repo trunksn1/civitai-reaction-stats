@@ -10,6 +10,12 @@ const CIVITAI_API_KEY = process.env.CIVITAI_API_KEY; // Optional - may help get 
 const CIVITAI_RED_API_KEY = process.env.CIVITAI_RED_API_KEY || process.env.CIVITAI_API_KEY;
 const CIVITAI_RED_ENABLED = (process.env.CIVITAI_RED_ENABLED || 'true').toLowerCase() !== 'false';
 const REFRESH_TIER_OVERRIDE = process.env.REFRESH_TIER; // Optional: 'auto', 'daily', 'monthly', 'quarterly'
+// Escape hatch for the never-decrease clamp: images listed here (comma-separated
+// IDs) take the API's fresh values as-is for this run, so an inflated stat that
+// got baked in by the clamp can be corrected. See README "Fixing inflated stats".
+const RESET_IMAGE_IDS = new Set(
+  (process.env.RESET_IMAGE_IDS || '').split(',').map(s => s.trim()).filter(Boolean)
+);
 
 // Validate required environment variables
 if (!GIST_ID || !GIST_TOKEN || !CIVITAI_USERNAME) {
@@ -30,6 +36,10 @@ if (CIVITAI_RED_ENABLED) {
   console.log(`civitai.red capture: enabled${process.env.CIVITAI_RED_API_KEY ? ' (dedicated key)' : ' (using .com key)'}`);
 } else {
   console.log('civitai.red capture: disabled');
+}
+
+if (RESET_IMAGE_IDS.size > 0) {
+  console.log(`Clamp reset requested for ${RESET_IMAGE_IDS.size} image(s): ${[...RESET_IMAGE_IDS].join(', ')}`);
 }
 
 const octokit = new Octokit({ auth: GIST_TOKEN });
@@ -94,6 +104,9 @@ async function fetchWithRetry(url, retries = MAX_RETRIES, backoff = INITIAL_BACK
       backoff *= 2;
     }
   }
+  // Only reachable when every attempt hit a 429 (the catch path rethrows on the
+  // last attempt). Fail loudly instead of returning undefined.
+  throw new Error(`Rate limited after ${retries} retries: ${url}`);
 }
 
 function sleep(ms) {
@@ -143,15 +156,18 @@ function getRefreshTier() {
     return REFRESH_TIER_OVERRIDE;
   }
 
-  // Auto: determine tier based on date
+  // Auto: determine tier based on date (UTC — matches the Actions cron).
+  // Escalated tiers fire only at hour 0: the job runs hourly and would
+  // otherwise repeat the expensive full refresh 24 times on tier days.
   const now = new Date();
-  const dayOfMonth = now.getDate();
-  const month = now.getMonth(); // 0-indexed
+  const dayOfMonth = now.getUTCDate();
+  const month = now.getUTCMonth(); // 0-indexed
+  const hour = now.getUTCHours();
 
-  if (dayOfMonth === 1 && month % 3 === 0) {
+  if (dayOfMonth === 1 && hour === 0 && month % 3 === 0) {
     return 'quarterly';
   }
-  if (dayOfMonth === 1) {
+  if (dayOfMonth === 1 && hour === 0) {
     return 'monthly';
   }
   return 'daily';
@@ -176,9 +192,18 @@ async function refreshImageStats(images) {
                   (img.stats?.laughCount || 0) + (img.stats?.cryCount || 0);
     const createdAt = new Date(img.createdAt);
 
-    // Always: images with 0 stats or from last 30 days
-    if (total === 0 || createdAt >= thirtyDaysAgo) {
+    // Always: images from the last 30 days
+    if (createdAt >= thirtyDaysAgo) {
       toRefresh.add(img);
+      continue;
+    }
+
+    // Zero-stat images older than 30 days: refresh on the monthly tier only.
+    // (They used to be re-fetched every single hour forever, even when long dead.)
+    if (total === 0) {
+      if (tier === 'monthly' || tier === 'quarterly') {
+        toRefresh.add(img);
+      }
       continue;
     }
 
@@ -219,8 +244,9 @@ async function refreshImageStats(images) {
       if (stats) {
         const bulkStats = batch[j].stats || {};
         // Keep the higher value for each field — individual refresh should
-        // correct understated bulk stats, not overwrite with stale/lower values
-        const mergedStats = {
+        // correct understated bulk stats, not overwrite with stale/lower values.
+        // Exception: a requested clamp reset trusts the fresh fetch as-is.
+        const mergedStats = RESET_IMAGE_IDS.has(String(batch[j].id)) ? { ...stats } : {
           likeCount: Math.max(stats.likeCount || 0, bulkStats.likeCount || 0),
           heartCount: Math.max(stats.heartCount || 0, bulkStats.heartCount || 0),
           laughCount: Math.max(stats.laughCount || 0, bulkStats.laughCount || 0),
@@ -509,7 +535,9 @@ function createEmptyStats() {
  */
 async function updateGist(data) {
   try {
-    const content = JSON.stringify(data, null, 2);
+    // Compact output: pretty-printing inflated the file ~2-3x, undoing the
+    // delta-encoding savings. The gist is machine-read, not human-read.
+    const content = JSON.stringify(data);
 
     console.log('\nUpdating Gist...');
     console.log(`  Data size: ${(content.length / 1024).toFixed(2)} KB`);
@@ -753,6 +781,11 @@ function processImages(apiImages, existingImages = []) {
   let totalCollects = 0;
   let totalViews = 0;
 
+  // Bookkeeping for the integrity check in main(): snapshots may only be
+  // added (new data point) or removed by retention — never lost in the merge.
+  let snapshotsAdded = 0;
+  let retentionRemoved = 0;
+
   const images = apiImages.map(img => {
     const apiLikes = img.stats?.likeCount || 0;
     const apiHearts = img.stats?.heartCount || 0;
@@ -772,15 +805,21 @@ function processImages(apiImages, existingImages = []) {
       ? resolveSnapshot(snapshots, snapshots.length - 1)
       : null;
 
-    // Clamp: never let stats decrease due to stale bulk API data
-    const likes = Math.max(apiLikes, lastSnapshot?.likes || 0);
-    const hearts = Math.max(apiHearts, lastSnapshot?.hearts || 0);
-    const laughs = Math.max(apiLaughs, lastSnapshot?.laughs || 0);
-    const cries = Math.max(apiCries, lastSnapshot?.cries || 0);
-    const comments = Math.max(apiComments, lastSnapshot?.comments || 0);
-    const buzz = Math.max(apiBuzz, lastSnapshot?.buzz || 0);
-    const collects = Math.max(apiCollects, lastSnapshot?.collects || 0);
-    const views = Math.max(apiViews, lastSnapshot?.views || 0);
+    // Clamp: never let stats decrease due to stale bulk API data.
+    // Skipped for images with a requested clamp reset, so a previously
+    // baked-in inflated value can come back down to the real one.
+    const resetClamp = RESET_IMAGE_IDS.has(String(img.id));
+    if (resetClamp) {
+      console.log(`  Clamp reset for image ${img.id}: accepting API values as-is`);
+    }
+    const likes = resetClamp ? apiLikes : Math.max(apiLikes, lastSnapshot?.likes || 0);
+    const hearts = resetClamp ? apiHearts : Math.max(apiHearts, lastSnapshot?.hearts || 0);
+    const laughs = resetClamp ? apiLaughs : Math.max(apiLaughs, lastSnapshot?.laughs || 0);
+    const cries = resetClamp ? apiCries : Math.max(apiCries, lastSnapshot?.cries || 0);
+    const comments = resetClamp ? apiComments : Math.max(apiComments, lastSnapshot?.comments || 0);
+    const buzz = resetClamp ? apiBuzz : Math.max(apiBuzz, lastSnapshot?.buzz || 0);
+    const collects = resetClamp ? apiCollects : Math.max(apiCollects, lastSnapshot?.collects || 0);
+    const views = resetClamp ? apiViews : Math.max(apiViews, lastSnapshot?.views || 0);
 
     if (lastSnapshot && (apiLikes < lastSnapshot.likes || apiHearts < lastSnapshot.hearts ||
         apiLaughs < lastSnapshot.laughs || apiCries < lastSnapshot.cries || apiComments < lastSnapshot.comments)) {
@@ -811,6 +850,7 @@ function processImages(apiImages, existingImages = []) {
       if (!lastSnapshot) {
         // First snapshot — store absolute
         snapshots.push({ timestamp, likes, hearts, laughs, cries, comments, buzz, collects, views });
+        snapshotsAdded++;
       } else {
         // Subsequent snapshot — store as delta
         const delta = { timestamp };
@@ -824,13 +864,16 @@ function processImages(apiImages, existingImages = []) {
         if (views - lastSnapshot.views) delta.dvi = views - lastSnapshot.views;
         if (Object.keys(delta).length > 1) {
           snapshots.push(delta);
+          snapshotsAdded++;
         }
       }
     }
 
     // Apply retention: resolve to absolute first, retain, then re-encode as deltas
     let resolvedSnapshots = resolveAllSnapshots(snapshots);
+    const beforeRetention = resolvedSnapshots.length;
     resolvedSnapshots = applyRetentionPolicy(resolvedSnapshots);
+    retentionRemoved += beforeRetention - resolvedSnapshots.length;
     snapshots = encodeAsDeltas(resolvedSnapshots);
 
     const host = img.host || 'com';
@@ -908,7 +951,7 @@ function processImages(apiImages, existingImages = []) {
     imageCount: images.length
   };
 
-  return { images, totalSnapshot };
+  return { images, totalSnapshot, snapshotsAdded, retentionRemoved };
 }
 
 /**
@@ -958,8 +1001,13 @@ async function main() {
 
     console.log(`\nExisting data: ${existingData.totalSnapshots.length} totalSnapshots, ${existingData.images.length} images`);
 
+    // Snapshot count before the merge — baseline for the integrity check below
+    const preMergeSnapshotCount = existingData.images.reduce(
+      (sum, img) => sum + (img.snapshots?.length || 0), 0);
+
     // Process images with existing data to merge snapshots
-    const { images, totalSnapshot } = processImages(apiImages, existingData.images);
+    const { images, totalSnapshot, snapshotsAdded, retentionRemoved } =
+      processImages(apiImages, existingData.images);
 
     console.log('\nSnapshot created:');
     console.log(`  Images: ${totalSnapshot.imageCount}`);
@@ -979,14 +1027,18 @@ async function main() {
       // Clamp: total should never decrease (same rationale as per-image clamping)
       // If the API missed images, the carried-forward stats (Change 2) should prevent this,
       // but this is a safety net in case anything slips through.
-      totalSnapshot.likes = Math.max(totalSnapshot.likes, prevTotal.likes);
-      totalSnapshot.hearts = Math.max(totalSnapshot.hearts, prevTotal.hearts);
-      totalSnapshot.laughs = Math.max(totalSnapshot.laughs, prevTotal.laughs);
-      totalSnapshot.cries = Math.max(totalSnapshot.cries, prevTotal.cries);
-      totalSnapshot.comments = Math.max(totalSnapshot.comments, prevTotal.comments);
-      totalSnapshot.buzz = Math.max(totalSnapshot.buzz, prevTotal.buzz || 0);
-      totalSnapshot.collects = Math.max(totalSnapshot.collects, prevTotal.collects || 0);
-      totalSnapshot.views = Math.max(totalSnapshot.views, prevTotal.views || 0);
+      // Skipped when a clamp reset was requested: the whole point of a reset run
+      // is to let a corrected (lower) image value flow into the total.
+      if (RESET_IMAGE_IDS.size === 0) {
+        totalSnapshot.likes = Math.max(totalSnapshot.likes, prevTotal.likes);
+        totalSnapshot.hearts = Math.max(totalSnapshot.hearts, prevTotal.hearts);
+        totalSnapshot.laughs = Math.max(totalSnapshot.laughs, prevTotal.laughs);
+        totalSnapshot.cries = Math.max(totalSnapshot.cries, prevTotal.cries);
+        totalSnapshot.comments = Math.max(totalSnapshot.comments, prevTotal.comments);
+        totalSnapshot.buzz = Math.max(totalSnapshot.buzz, prevTotal.buzz || 0);
+        totalSnapshot.collects = Math.max(totalSnapshot.collects, prevTotal.collects || 0);
+        totalSnapshot.views = Math.max(totalSnapshot.views, prevTotal.views || 0);
+      }
 
       const delta = { timestamp: totalSnapshot.timestamp, imageCount: totalSnapshot.imageCount };
       if (totalSnapshot.likes - prevTotal.likes) delta.dl = totalSnapshot.likes - prevTotal.likes;
@@ -1033,44 +1085,39 @@ async function main() {
     existingData.username = CIVITAI_USERNAME;
     existingData.lastUpdated = totalSnapshot.timestamp;
 
-    // SAFETY CHECK: Prevent catastrophic data loss
-    // If we read existing data but new data has way fewer snapshots, something went wrong
-    if (snapshotsBefore > 1) { // Only check if we had meaningful existing data
-      const newImageSnapshotCount = images.reduce((sum, img) => {
-        return sum + (img.snapshots?.length || 0);
-      }, 0);
+    // SAFETY CHECK: Prevent catastrophic data loss.
+    // Exact accounting: per-image snapshots may only be added (one new data
+    // point per changed image) or removed by retention. Ending below that
+    // floor means the merge dropped history — abort before overwriting.
+    const postMergeSnapshotCount = images.reduce(
+      (sum, img) => sum + (img.snapshots?.length || 0), 0);
+    const expectedSnapshotCount = preMergeSnapshotCount + snapshotsAdded - retentionRemoved;
 
-      // For validation, we need to count what we started with
-      // We can estimate: if we had X totalSnapshots and Y images, we should have roughly similar image snapshots
-      // A more precise check: count current vs what we expect after adding one more snapshot per image
-      const expectedMinImageSnapshots = existingData.images.length; // At minimum, each image should have 1 snapshot
+    console.log('\nData integrity check:');
+    console.log(`  Image snapshots before merge: ${preMergeSnapshotCount}`);
+    console.log(`  Added this run: ${snapshotsAdded}, removed by retention: ${retentionRemoved}`);
+    console.log(`  Image snapshots after merge: ${postMergeSnapshotCount} (expected: ${expectedSnapshotCount})`);
 
-      console.log('\nData integrity check:');
-      console.log(`  Total snapshots: ${existingData.totalSnapshots.length}`);
-      console.log(`  Total image snapshots: ${newImageSnapshotCount}`);
-      console.log(`  Images tracked: ${images.length}`);
-
-      // Sanity check: We should have at least as many image snapshots as images
-      // And the count should be reasonable (not drastically low)
-      if (newImageSnapshotCount < expectedMinImageSnapshots) {
-        console.error('');
-        console.error('═══════════════════════════════════════════════════════════');
-        console.error('DATA LOSS DETECTED!');
-        console.error('═══════════════════════════════════════════════════════════');
-        console.error(`Expected at least: ${expectedMinImageSnapshots} image snapshots`);
-        console.error(`Actual image snapshots: ${newImageSnapshotCount}`);
-        console.error('');
-        console.error('This indicates a critical bug in data merging.');
-        console.error('ABORTING to prevent overwriting good data with incomplete data.');
-        console.error('═══════════════════════════════════════════════════════════');
-        console.error('');
-        process.exit(1);
-      }
-
-      console.log('✓ Data integrity check: PASSED');
-    } else {
-      console.log('\nSkipping data integrity check (first run or minimal existing data)');
+    if (postMergeSnapshotCount < expectedSnapshotCount) {
+      console.error('');
+      console.error('═══════════════════════════════════════════════════════════');
+      console.error('DATA LOSS DETECTED!');
+      console.error('═══════════════════════════════════════════════════════════');
+      console.error(`Expected: ${expectedSnapshotCount} image snapshots`);
+      console.error(`  (${preMergeSnapshotCount} before + ${snapshotsAdded} added - ${retentionRemoved} retention)`);
+      console.error(`Actual: ${postMergeSnapshotCount}`);
+      console.error('');
+      console.error('This indicates a critical bug in data merging.');
+      console.error('ABORTING to prevent overwriting good data with incomplete data.');
+      console.error('═══════════════════════════════════════════════════════════');
+      console.error('');
+      process.exit(1);
     }
+
+    if (postMergeSnapshotCount > expectedSnapshotCount) {
+      console.log(`  Note: ${postMergeSnapshotCount - expectedSnapshotCount} more snapshots than expected (harmless, but worth a look)`);
+    }
+    console.log('✓ Data integrity check: PASSED');
 
     // Update Gist
     await updateGist(existingData);
