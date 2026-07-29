@@ -281,8 +281,18 @@ async function refreshPostTitles(images, existingPostTitles, tier) {
     if (!seen.has(key)) seen.set(key, img.host || 'com');
   }
 
+  // Posts we've never resolved always come first. On an escalated tier we also
+  // re-check known ones, but only with whatever budget is left over — otherwise
+  // a re-check sweep spends the entire budget re-reading titles we already have
+  // while images with no name at all keep waiting.
+  const unresolved = [];
+  const resolved = [];
+  for (const entry of seen.entries()) {
+    (entry[0] in postTitles ? resolved : unresolved).push(entry);
+  }
+
   const recheck = tier === 'monthly' || tier === 'quarterly';
-  const pending = [...seen.entries()].filter(([postId]) => recheck || !(postId in postTitles));
+  const pending = recheck ? [...unresolved, ...resolved] : unresolved;
 
   if (pending.length === 0) {
     console.log(`\nPost titles: ${Object.keys(postTitles).length} known, nothing new to resolve`);
@@ -290,7 +300,9 @@ async function refreshPostTitles(images, existingPostTitles, tier) {
   }
 
   const budgeted = pending.slice(0, POST_TITLE_BUDGET);
-  console.log(`\nResolving post titles: ${budgeted.length} of ${pending.length} pending (budget ${POST_TITLE_BUDGET}, tier: ${tier})`);
+  const newInBatch = budgeted.filter(([postId]) => !(postId in postTitles)).length;
+  console.log(`\nResolving post titles: ${budgeted.length} of ${pending.length} pending ` +
+    `(${newInBatch} never seen, ${budgeted.length - newInBatch} re-checks; budget ${POST_TITLE_BUDGET}, tier: ${tier})`);
 
   let titled = 0;
   let untitled = 0;
