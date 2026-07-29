@@ -15,6 +15,7 @@ This project consists of two components:
 - **Interactive charts** showing reactions over time (1d, 7d, 30d, 90d, all time)
 - **Summary cards** with total likes 👍, hearts ❤️, laughs 😂, cries 😢, and comments 💬
 - **Per-image statistics** with sorting by date, reactions, or comments
+- **Readable image names** from your post titles, with a rename box for the rest
 - **Dark theme** matching Civitai's aesthetic
 - **Smart data retention** - Automatic aggregation (hourly → 6-hour → daily) to prevent Gist size growth
 - **Resilient API calls** - Exponential backoff retry logic with rate limit handling
@@ -70,6 +71,8 @@ Chrome Extension ◄── reads ◄── gist.githubusercontent.com
 **Note:** The `CIVITAI_API_KEY` is optional but recommended. Without it, the script uses unauthenticated requests which may have lower rate limits.
 
 **civitai.red (R-rated and harder content):** Civitai moved R+ content to a separate domain, `civitai.red`. The collector now queries **both** `civitai.com` and `civitai.red` so reactions on your R+ images keep being tracked. This is on by default; set the `CIVITAI_RED_ENABLED` repo variable to `false` to disable it.
+
+**Image names:** Civitai images have no name of their own, so the extension builds one — see [How images get their names](#how-images-get-their-names). The collector resolves your post titles at up to `POST_TITLE_BUDGET` posts per run (default 300); the first backfill drains over a few runs.
 
 Civitai issues a **single account-wide API key** (civitai.com → Account settings → **API Keys**) that works on **both** domains — there is no separate "civitai.red" key. In fact bulk discovery works even with no key at all, so just leave `CIVITAI_RED_API_KEY` **unset** unless you have a specific reason to use a different key for `.red`. See [civitai.red split](#civitairred-split-r-content) below for what happens to images tracked before the split.
 
@@ -274,6 +277,36 @@ Civitai moved R-rated-and-harder content to a separate domain, `civitai.red`. Th
 - Image links point at the correct domain (`civitai.com` or `civitai.red`).
 
 **⚠️ One-time catch-up bump:** the first successful `.red` run records each previously-frozen image at its *current* (higher) total. Because stats are stored as gains-over-time, all the reactions earned while the image was frozen appear as a **single spike** on that date. This is expected — those reactions are real, but Civitai's API never exposed *when* each one arrived, so they can't be spread across the gap.
+
+## How images get their names
+
+Civitai images have no name. The API field the extension used to lean on is the
+generation prompt, and it comes back empty for every image on this account — which
+is why every card used to read `Image 114507519`.
+
+So the extension builds a name, taking the first of these that exists:
+
+1. **A name you set on that one image** (pencil icon on the card).
+2. **A name you set on the whole post** — each image shows it as `Name — pt. 1`,
+   `Name — pt. 2`, …
+3. **The post's title on Civitai**, numbered the same way when the post holds
+   several images.
+4. **Base model and date**, e.g. `SD 1.5 · Jan 15, 2024`.
+5. `Image {id}`, if nothing else is available.
+
+Hovering a name shows where it came from, plus the post it belongs to.
+
+**Renaming is local.** Names live in `chrome.storage.local` on that browser — they
+are not written to Civitai and not synced between machines. Renaming an image that
+shares a post asks whether to name the whole post or just that one image; clearing
+the box restores the automatic name.
+
+**About `pt. 1` / `pt. 2`:** that numbering exists only in this extension. A Civitai
+post has a single title shared by all the images in it, and images have no title of
+their own, so there is no per-image name to store upstream even in principle.
+
+**Most posts have no title** (~7% of this account's do), which is why rung 4 exists —
+otherwise almost everything would still show a bare id.
 
 ## Troubleshooting
 

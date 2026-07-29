@@ -30,6 +30,10 @@ const RESET_IMAGE_IDS = new Set(
 // Force a full discovery sweep (all pages, all NSFW levels, both hosts) on a
 // daily-tier run. Monthly/quarterly tiers and first runs always sweep fully.
 const FULL_DISCOVERY = (process.env.FULL_DISCOVERY || '').toLowerCase() === 'true';
+// How many post titles to resolve per run. Titles are used to give images a
+// human name in the extension; unresolved posts are retried on later runs, so
+// the initial backfill drains over a few runs instead of blowing one up.
+const POST_TITLE_BUDGET = Number(process.env.POST_TITLE_BUDGET || 300);
 
 // Validate required environment variables
 if (!GIST_ID || !GIST_TOKEN || !CIVITAI_USERNAME) {
@@ -155,6 +159,166 @@ async function fetchImageStats(imageId, host = 'com') {
     console.log(`  Warning: Failed to fetch stats for image ${imageId}: ${error.message}`);
   }
   return null;
+}
+
+/**
+ * Post titles — the source of human-readable image names in the extension.
+ *
+ * Two ways in, cheapest first:
+ *   1. tRPC `post.get`, which needs a Civitai API key. A few hundred bytes.
+ *   2. Scraping the post page's embedded Next.js payload. ~110KB per post, so
+ *      only used when tRPC is unavailable (it 401s for unauthenticated callers).
+ *
+ * Tri-state so a tRPC lockout costs one failed probe rather than one per post.
+ * null = not yet probed, true/false = known.
+ */
+let trpcPostGetAvailable = null;
+
+async function fetchPostTitleViaTrpc(postId, host) {
+  const input = { json: { id: Number(postId) } };
+  const url = `${siteOriginForHost(host)}/api/trpc/post.get?input=${encodeURIComponent(JSON.stringify(input))}`;
+  const headers = {};
+  const key = host === 'red' ? CIVITAI_RED_API_KEY : CIVITAI_API_KEY;
+  if (key) headers['Authorization'] = `Bearer ${key}`;
+
+  const response = await fetch(url, { headers });
+  if (!response.ok) {
+    const err = new Error(`HTTP ${response.status}`);
+    err.status = response.status;
+    throw err;
+  }
+  const data = await response.json();
+  const post = data?.result?.data?.json;
+  if (!post) throw new Error('unexpected tRPC response shape');
+  // A post with no title yields null — a valid, cacheable answer, not a failure.
+  return typeof post.title === 'string' && post.title.trim() ? post.title.trim() : null;
+}
+
+/**
+ * Pull the title out of a post page's __NEXT_DATA__ blob.
+ *
+ * Match the cached query by `state.data.id`, NOT by array index: index 0 has
+ * been observed to be the site-wide announcement banner, whose title would
+ * otherwise be silently adopted as the post's name.
+ */
+function extractPostTitleFromHtml(html, postId) {
+  const match = html.match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/);
+  if (!match) return { ok: false, reason: 'no __NEXT_DATA__' };
+
+  let parsed;
+  try {
+    parsed = JSON.parse(match[1]);
+  } catch {
+    return { ok: false, reason: 'unparseable __NEXT_DATA__' };
+  }
+
+  const queries = parsed?.props?.pageProps?.trpcState?.json?.queries || [];
+  for (const query of queries) {
+    const data = query?.state?.data;
+    if (data && Number(data.id) === Number(postId)) {
+      const title = typeof data.title === 'string' && data.title.trim() ? data.title.trim() : null;
+      return { ok: true, title };
+    }
+  }
+  return { ok: false, reason: 'no query matched the post id' };
+}
+
+async function fetchPostTitleViaHtml(postId, host) {
+  const response = await fetch(`${siteOriginForHost(host)}/posts/${postId}`, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; civitai-reaction-stats)' }
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const result = extractPostTitleFromHtml(await response.text(), postId);
+  if (!result.ok) throw new Error(result.reason);
+  return result.title;
+}
+
+/**
+ * Resolve one post's title. Returns { title } on success (title may be null for
+ * an untitled post) or null when the post could not be read at all — the caller
+ * distinguishes the two so "untitled" gets cached and "failed" gets retried.
+ */
+async function fetchPostTitle(postId, host = 'com') {
+  if (trpcPostGetAvailable !== false) {
+    try {
+      const title = await fetchPostTitleViaTrpc(postId, host);
+      if (trpcPostGetAvailable === null) {
+        trpcPostGetAvailable = true;
+        console.log('  Post titles: using tRPC post.get');
+      }
+      return { title };
+    } catch (error) {
+      if (trpcPostGetAvailable === null) {
+        trpcPostGetAvailable = false;
+        console.log(`  Post titles: tRPC post.get unavailable (${error.message}) — falling back to page scraping`);
+      }
+      // fall through to the HTML path
+    }
+  }
+
+  try {
+    return { title: await fetchPostTitleViaHtml(postId, host) };
+  } catch (error) {
+    console.log(`  Warning: could not read title for post ${postId}: ${error.message}`);
+    return null;
+  }
+}
+
+/**
+ * Resolve titles for posts we don't have yet, newest images first, up to a
+ * per-run budget. Existing entries are kept; re-checks happen on escalated
+ * tiers only, since titles rarely change.
+ */
+async function refreshPostTitles(images, existingPostTitles, tier) {
+  const postTitles = { ...(existingPostTitles || {}) };
+
+  // One representative host per post, newest first — a post's images share a host.
+  const seen = new Map();
+  const ordered = [...images].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  for (const img of ordered) {
+    if (img.postId == null) continue;
+    const key = String(img.postId);
+    if (!seen.has(key)) seen.set(key, img.host || 'com');
+  }
+
+  const recheck = tier === 'monthly' || tier === 'quarterly';
+  const pending = [...seen.entries()].filter(([postId]) => recheck || !(postId in postTitles));
+
+  if (pending.length === 0) {
+    console.log(`\nPost titles: ${Object.keys(postTitles).length} known, nothing new to resolve`);
+    return postTitles;
+  }
+
+  const budgeted = pending.slice(0, POST_TITLE_BUDGET);
+  console.log(`\nResolving post titles: ${budgeted.length} of ${pending.length} pending (budget ${POST_TITLE_BUDGET}, tier: ${tier})`);
+
+  let titled = 0;
+  let untitled = 0;
+  let failed = 0;
+
+  for (let i = 0; i < budgeted.length; i++) {
+    const [postId, host] = budgeted[i];
+    const result = await fetchPostTitle(postId, host);
+
+    if (result) {
+      postTitles[postId] = { title: result.title, fetchedAt: new Date().toISOString() };
+      if (result.title) titled++;
+      else untitled++;
+    } else {
+      failed++; // left absent so a later run retries it
+    }
+
+    // Page scraping is ~110KB a pop; pace it. tRPC is cheap enough to go faster.
+    if (i < budgeted.length - 1) {
+      await sleep(trpcPostGetAvailable ? 150 : 500);
+    }
+  }
+
+  const remaining = pending.length - budgeted.length;
+  console.log(`Post titles: ${titled} titled, ${untitled} untitled, ${failed} failed` +
+    (remaining > 0 ? ` — ${remaining} left for the next run` : ''));
+
+  return postTitles;
 }
 
 /**
@@ -457,6 +621,8 @@ async function fetchAllUserImages(username, existingImages = []) {
         url: existing.thumbnailUrl, // API field img.url = image file (becomes thumbnailUrl)
         meta: { prompt: existing.name },
         host: existing.host || 'com',
+        postId: existing.postId ?? null,
+        baseModel: existing.baseModel ?? null,
         stats: {
           likeCount: last.likes,
           heartCount: last.hearts,
@@ -597,7 +763,8 @@ function createEmptyStats() {
     username: CIVITAI_USERNAME,
     lastUpdated: null,
     totalSnapshots: [],
-    images: []
+    images: [],
+    postTitles: {}
   };
 }
 
@@ -845,6 +1012,11 @@ function processImages(apiImages, existingImages = []) {
       thumbnailUrl: img.url,
       createdAt: img.createdAt,
       host,
+      // Naming inputs for the extension: postId links to the post's title,
+      // baseModel is the fallback when a post has no title. Fall back to the
+      // stored value so an incremental run can't blank them.
+      postId: img.postId ?? existingImage?.postId ?? null,
+      baseModel: img.baseModel ?? existingImage?.baseModel ?? null,
       // Synthesized entries (incremental discovery didn't reach them) were not
       // actually seen by the API this run: keep their lastSeenAt and stale flag.
       lastSeenAt: img._synthesized ? (existingImage?.lastSeenAt || null) : timestamp,
@@ -881,6 +1053,8 @@ function processImages(apiImages, existingImages = []) {
         thumbnailUrl: existing.thumbnailUrl,
         createdAt: existing.createdAt,
         host,
+        postId: existing.postId ?? null,
+        baseModel: existing.baseModel ?? null,
         lastSeenAt: existing.lastSeenAt || null,
         stale: true,
         snapshots: existing.snapshots // keep existing snapshots as-is
@@ -1042,6 +1216,16 @@ async function main() {
 
     if (snapshotsBefore !== snapshotsAfter) {
       console.log(`\nRetention policy (total): ${snapshotsBefore} -> ${snapshotsAfter} snapshots`);
+    }
+
+    // Resolve post titles (best-effort — names are cosmetic, never worth
+    // failing a stats run over).
+    try {
+      existingData.postTitles = await refreshPostTitles(
+        images, existingData.postTitles, getRefreshTier());
+    } catch (error) {
+      console.log(`\n⚠️  Post title resolution failed (continuing): ${error.message}`);
+      existingData.postTitles = existingData.postTitles || {};
     }
 
     // Update images with merged snapshots

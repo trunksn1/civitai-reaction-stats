@@ -19,6 +19,10 @@ on:
         description: 'Comma-separated image IDs whose never-decrease clamp is bypassed this run (fixes inflated stats)'
         required: false
         default: ''
+      post-title-budget:
+        description: 'Max post titles to resolve this run (blank = 300). Raise for a one-off backfill.'
+        required: false
+        default: ''
 
 # A slow run (e.g. quarterly refresh) must never overlap the next hourly run:
 # both would read the gist, then last-write-wins would silently drop a snapshot.
@@ -57,3 +61,5 @@ jobs:
           CIVITAI_RED_API_KEY: ${{ secrets.CIVITAI_RED_API_KEY }}
           REFRESH_TIER: ${{ github.event.inputs.refresh-tier || 'auto' }}
           RESET_IMAGE_IDS: ${{ github.event.inputs.reset-image-ids || '' }}
+          # Blank is fine — the collector falls back to its own default (300).
+          POST_TITLE_BUDGET: ${{ github.event.inputs.post-title-budget || '' }}

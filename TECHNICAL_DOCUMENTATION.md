@@ -429,6 +429,7 @@ interface StatsData {
   lastUpdated: string;                 // ISO 8601 timestamp
   totalSnapshots: TotalSnapshot[];     // Aggregate stats over time
   images: ImageData[];                 // Individual image data
+  postTitles: PostTitles;              // postId -> title cache (see below)
 }
 
 interface TotalSnapshot {
@@ -447,8 +448,19 @@ interface ImageData {
   url: string;                         // https://civitai.com/images/{id}
   thumbnailUrl: string;                // Direct image URL
   createdAt: string;                   // ISO 8601 timestamp
+  postId: number | null;               // Parent post — links to postTitles
+  baseModel: string | null;            // e.g. "SD 1.5"; fallback display name
   snapshots: ImageSnapshot[];          // Time-series stats for this image
 }
+
+// Post titles, resolved separately and cached across runs. Keyed by post id.
+// An entry with title === null means "checked, the post has no title" — that is
+// a cached answer, not a failure. Posts that could not be read are left absent
+// so a later run retries them.
+type PostTitles = Record<string, {
+  title: string | null;
+  fetchedAt: string;                   // ISO 8601
+}>;
 
 interface ImageSnapshot {
   timestamp: string;                   // ISO 8601 timestamp
@@ -502,6 +514,8 @@ interface ImageSnapshot {
       "url": "https://civitai.com/images/12345678",
       "thumbnailUrl": "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/abcd1234/width=450/12345678.jpeg",
       "createdAt": "2024-01-14T12:30:00.000Z",
+      "postId": 98765,
+      "baseModel": "SD 1.5",
       "snapshots": [
         {
           "timestamp": "2024-01-15T08:00:00.000Z",
@@ -532,6 +546,72 @@ interface ImageSnapshot {
   ]
 }
 ```
+
+---
+
+## Image Naming
+
+Images on Civitai have no user-facing name. `ImageData.name` is the generation
+prompt truncated to 100 chars — but the REST API returns `meta: null` for every
+image on this account (744/744 sampled, 2024→2026), so that field is *always*
+the `Image {id}` fallback. Every card read "Image 114507519" before this existed.
+
+### Where a displayed name comes from
+
+`displayName()` in `extension/stats-page/stats.js` walks these rungs in order:
+
+| # | Source | Stored in | Notes |
+|---|--------|-----------|-------|
+| 1 | Name the user set on this image | `chrome.storage.local` → `imageNames[imageId]` | Wins over everything |
+| 2 | Name the user set on the whole post | `chrome.storage.local` → `postNames[postId]` | Rendered as `Name — pt. N` |
+| 3 | The post's title on Civitai | gist → `postTitles[postId].title` | Rendered as `Title — pt. N` |
+| 4 | `baseModel · date` | gist → `ImageData` | e.g. `SD 1.5 · Jan 15, 2024`; ~98% coverage |
+| 5 | `ImageData.name` | gist | In practice `Image {id}` |
+
+Only ~7% of posts have a title, which is why rung 4 exists — without it the
+cascade would fall through to a bare id for almost everything.
+
+### "pt. N" numbering
+
+A multi-image post numbers its images `— pt. 1`, `— pt. 2`, … **This is a display
+convention of this extension only.** A Civitai post has exactly one `title` field
+shared by all its images, and images have no title of their own, so per-image
+numbering could never be stored upstream.
+
+Ordering is **by image id ascending, never `createdAt`**: sibling images usually
+share one publish timestamp (post `29264269` has four images at the same second),
+and in some older posts the `createdAt` order contradicts the id order
+(post `1331368`). Id is the only stable key.
+
+Post-wide names are stored as **one base name plus the post id**, not as N
+expanded strings — so adding an image to that post later renumbers correctly
+instead of leaving stale, unfixable numbering.
+
+### Resolving post titles (collector)
+
+`refreshPostTitles()` resolves titles for posts not yet in the cache, newest
+first, capped at `POST_TITLE_BUDGET` (default 300) per run; the remainder drains
+over subsequent runs. Titles are re-checked only on the monthly/quarterly tiers.
+
+Two ways in, cheapest first:
+
+1. **tRPC `post.get`** with the `CIVITAI_API_KEY` — a few hundred bytes.
+2. **Scraping `/posts/{id}`** — parses the `__NEXT_DATA__` blob at
+   `props.pageProps.trpcState.json.queries[]`, taking the entry whose
+   `state.data.id` matches the post id. ~110 KB per post, so only used when tRPC
+   is unavailable.
+
+The tRPC route is probed once and the outcome cached in `trpcPostGetAvailable`,
+so a lockout costs one failed request rather than one per post.
+
+> **Match by `state.data.id`, not array index.** Index 0 has been observed to hold
+> the site-wide announcement banner, whose title would otherwise be silently
+> adopted as the post's name.
+
+A post that is read successfully but has no title caches as `title: null` — a real
+answer. A post that could not be read is left absent so a later run retries it.
+Title resolution is wrapped in its own try/catch in `main()`: names are cosmetic
+and must never fail a stats run.
 
 ---
 

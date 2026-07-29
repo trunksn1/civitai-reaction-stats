@@ -106,6 +106,302 @@ Ordered by delight-per-effort; each is an independent widget on the Overview tab
 | 6.9 | Monthly recap card exported as PNG (canvas-rendered, Wrapped-style) | existing | L |
 | 6.10 | Prompt/keyword performance correlation — requires keeping more of `meta.prompt` (or a keyword set) at collection time | collector change + UI | L |
 
+## Phase 7 — Real image names (post titles, write-back)
+
+*Goal: stop showing `Image 114507519` everywhere. Derive a human name from the post
+title, and let the rename box actually write that title back to Civitai.*
+
+### 7.0 Findings that shape this phase (measured 2026-07-29, account `JeneScript`)
+
+Sample: 744 images / 458 posts pulled from the public REST API across all four NSFW
+levels, spanning 2024-01-15 → 2026-07-28.
+
+| Question | Measured answer |
+|---|---|
+| Is `postId` available? | **Yes, 744/744.** Already in the REST response the collector reads — it is simply discarded today. Free to store. |
+| Do posts have titles? | **~7%.** 2/30 in an evenly time-spread sample, 1/25 in a recent-only sample. Not a recency effect — untitled is the norm across all 2.5 years. |
+| Is the original filename available? | **No — 0/744.** Every CDN URL's last segment is the image UUID (`ae4c3921-…-1a57628ae436.jpeg`). Confirmed on 200 other-user images too. The public API exposes no filename field. |
+| Why is everything numeric today? | **`meta` is `null` on 744/744 images.** `name` in `fetch-stats.js:843` is `img.meta?.prompt?.substring(0,100) || 'Image ' + id`, so the fallback fires 100% of the time. |
+| Multi-image posts? | **128/458 posts (28%)**, up to 10 images each, mean 1.62 images/post. |
+| Usable fallback signal? | **`baseModel`, 733/744 (98.5%)** — `SD 1.5`, `OpenAI`, `Krea 2`, `Nano Banana`, `Illustrious`, … |
+
+**Consequences for the original feature request:**
+
+1. **The filename fallback is dead — settled 2026-07-29, see 7.1.** Not available publicly,
+   and not available from the authenticated download route either. There is no filename
+   rung. Drop it and stop looking.
+2. **Post titles alone fix only ~7% of names.** Reading titles is worth doing, but on its
+   own it leaves ~93% of images still called `Image <id>`. Hence 7.4 (a better fallback)
+   is not optional polish — without it the phase is barely visible.
+3. **`pt. N` is extension-only by design** (owner decision, 2026-07-29 — matches the
+   platform anyway). A post has exactly one `title` shared by all its images, and images
+   have no title of their own. So: **Civitai receives the plain title the user typed, with
+   no suffix.** The `— pt. 1` / `— pt. 2` numbering is a display convention that exists
+   only in the extension, applied when the user opts to spread the name across the post.
+   Nothing is lost here — the write is what the user wants written.
+4. **Write-back inverts the value of the feature.** Because only 7% of posts are titled,
+   the rename box pushing titles *to* Civitai is the thing that makes titles exist. The
+   owner does not title posts today because there is no payoff in the Civitai UI; this
+   feature *is* the payoff, and it improves the public post pages, not just this extension.
+   That makes 7.7 the point of the phase rather than a nice-to-have.
+
+Also invalidated by the `meta: null` finding: **item 6.10** (prompt/keyword correlation)
+has no data source on this account. Leave it listed, but it is blocked, not merely large.
+
+### 7.1 Gate: does the authenticated download carry a real filename? — ❌ **ANSWERED: NO**
+
+*Closed 2026-07-29. No work to do; kept as the record of why there is no filename rung.*
+
+Run logged in as the image owner, on `civitai.com`:
+
+```js
+const r = await fetch('/api/download/images/114507519', { credentials: 'include' });
+console.log(r.headers.get('content-disposition'), r.url);
+```
+
+**Result: `404 Not Found`** — on the owner's own image, while authenticated. (Unauthenticated,
+the same URL 307-redirects to login, so the route exists but serves nothing for images.)
+Combined with the URL evidence — the CDN path's final segment is the image UUID on 744/744
+own images and 200/200 sampled others — the conclusion is:
+
+> **Civitai does not retain or expose the uploaded filename.** What a browser saves when you
+> download an image is the UUID from the CDN URL, which is why nothing anywhere returns
+> `bingo bango bongo.png`.
+
+**Do not re-investigate this** without new evidence (e.g. an actual download that lands with
+a human filename — if that ever happens, capture the exact request from DevTools first).
+Task 7.5 is deleted, not deferred; 7.4's `baseModel · date` rung carries the fallback.
+
+### 7.2 ✅ Collector: store `postId` **[S]**
+
+`scripts/fetch-stats.js` — add `postId: img.postId ?? null` to the object returned by
+`processImages` (~line 841) and carry it through the two synthesis paths that rebuild
+image records (`fetchAllUserImages` incremental-synthesis, and the missing-image
+carry-forward in `processImages`) so it is not lost on non-sweep runs. No schema version
+bump needed: absent `postId` simply means "not yet collected".
+
+### 7.3 ✅ Collector: fetch post titles, budgeted and resumable **[M]**
+
+No public REST posts endpoint exists (`/api/v1/posts` → 404) and unauthenticated tRPC
+`post.get` now returns `401 "Please use the public API instead"`. The one working public
+read is the post page's embedded Next.js payload:
+
+```
+GET https://civitai.com/posts/{postId}
+→ <script id="__NEXT_DATA__">
+→ props.pageProps.trpcState.json.queries[] → find the entry whose state.data.id === postId
+→ .title            (null when untitled)
+```
+
+Match the query by `state.data.id`, **not** by array index — index 0 was the site-wide
+announcement banner on one of the two pages sampled.
+
+Constraints to respect:
+- ~110 KB per page fetch. A full backfill of ~6,500 posts (16k images at 1.62/post) is
+  ~700 MB and ~55 min at 500 ms spacing — too much for one hourly run.
+- So: **budget per run** (e.g. `POST_TITLE_BUDGET`, default 150) and persist a
+  `postTitles: { [postId]: { title, fetchedAt } }` map in the gist. Each run resolves
+  only posts absent from that map, newest-first, until the budget is spent. Backfill
+  completes over a couple of days and then costs only new posts per run.
+- Re-check titles on the monthly tier only (titles change rarely, and 7.7 writes them
+  through the same map anyway).
+- Best-effort throughout: a failed page fetch must never abort the run, matching the
+  existing `.red` discovery posture.
+
+### 7.4 ✅ Naming cascade **[M]**
+
+Replace the `displayName()` in `extension/stats-page/stats.js:1437`. Resolution order:
+
+1. User's local custom name (existing `customImageNames`) — always wins.
+2. Post title, when present. Multi-image post → append ` — pt. N` **for display only**,
+   where **N is the rank of the image id ascending within the post**. Sorting by id is
+   verified necessary: in post `1331368` the `createdAt` ordering contradicts id ordering,
+   and in post `29264269` all four images share one timestamp — `createdAt` is not a
+   stable sort key.
+3. `baseModel` + posted date, e.g. `SD 1.5 · 15 Jan 2024` — covers 98.5% and is genuinely
+   more informative than the id. Requires storing `baseModel` alongside `postId` in 7.2.
+4. `Image {id}` — final fallback, now rare.
+
+*(The filename rung the original request assumed would sit at #3 does not exist — see 7.1.)*
+
+**Truncation — deliberately not implemented. Reverse this if you disagree.**
+
+The original request asked for a 15-character cut with `…`. That rule was specified *for
+filenames* ("bingo bango bongo.png"), and filenames turned out not to exist (7.1). Applying
+it to the rungs that do exist would be destructive rather than tidy:
+
+| Real value | At 15 chars |
+|---|---|
+| `Various Models - clipskip differences` | `Various Models…` |
+| `Tiger and axolotl, Prompt on Canvas` | `Tiger and axolo…` |
+| `SD 1.5 · Jan 15, 2024` | `SD 1.5 · Jan 15…` |
+
+Post titles are the whole point of the feature, and 15 characters throws most of one away.
+Names are instead left full-length and clipped by CSS, which already ellipsizes at whatever
+width the card actually has — and the full name plus its origin is in the hover tooltip.
+Chart labels keep their existing 28-char cut.
+
+If a hard cap is still wanted, apply it to the base name **before** the ` — pt. N` suffix
+so the part number is never what gets truncated away.
+
+### 7.5 ~~Filename capture~~ — **deleted**
+
+Removed 2026-07-29: 7.1 proved there is no filename to capture. Intentionally left as a
+numbered stub so 7.6/7.7 references in older notes still line up.
+
+### 7.6 ✅ Rename UI: local name vs. post title **[M]**
+
+Extend the existing inline editor (`startRename`, `stats.js:1446`). Two independent things
+happen on save, and the dialog must keep them visually separate:
+
+- **What Civitai gets:** the plain title the user typed. No `pt. N`, ever. One title per
+  post, which is all Civitai stores.
+- **What the extension shows:** either just this image renamed, or the whole post's images
+  renamed with `— pt. 1..N` numbering.
+
+Flow:
+
+- **Single-image post** → rename the image; offer "Also set this as the post title on
+  Civitai?" as a checkbox. No numbering involved.
+- **Multi-image post (N images)** → after the name is entered, ask how it should apply
+  *in the extension*:
+  - **Use for all N images in this post** — they display `Title — pt. 1` … `Title — pt. N`.
+  - **Just this image** — only this card takes the name; siblings keep their existing names.
+  - Independently, the "Also set as the post title on Civitai" checkbox writes the plain
+    title. Both branches can push it — the choice above is purely about local display,
+    so make the checkbox's label say "the post title" and not "this name".
+- Renames stay in `chrome.storage.local` exactly as today; write-back is opt-in per action.
+  A local name is never silently pushed.
+- Expanding `pt. N` names into storage: write them as *derived* (store the base name +
+  the "spread across post" flag), not as N literal strings. Otherwise adding an image to
+  the post later leaves the numbering stale and unfixable.
+
+### 7.7 Write-back to Civitai **[L]** — riskiest item, ship last
+
+Mutating the user's live account. Requirements:
+
+- **Same-origin execution.** The stats page is a `chrome-extension://` origin; Civitai's
+  session cookie will not ride a cross-site POST under `SameSite=Lax`. So route it:
+  stats page → `chrome.runtime` message → service worker → content script on an open
+  `civitai.com` tab → same-origin `fetch('/api/trpc/post.update', …)` with
+  `credentials: 'include'`. If no Civitai tab is open, prompt the user rather than opening
+  one silently.
+- **Verify the mutation shape by observation first.** Rename a post in the Civitai UI with
+  DevTools open, capture the exact `post.update` request (input envelope, whether a CSRF
+  header rides along, whether omitted fields are treated as cleared), and mirror it. Do
+  **not** guess the payload — a partial update could blank a post's description.
+- **Confirm before the first write** and surface the server's response. Re-read the post
+  page (7.3) after writing to confirm the title actually changed, and update the cached
+  `postTitles` entry on success.
+- **Undo**: keep the previous title in local storage so a bad rename can be reverted.
+- tRPC is undocumented and has already tightened once (the 401 above) — treat write-back
+  as breakable-by-upstream, keep it behind a setting, and fail loudly but harmlessly.
+
+### 7.8 ✅ Docs **[S]**
+
+Fold the 7.0 findings into `memory/civitai-api-reference.md` (filename absence, the
+`__NEXT_DATA__` title route, the tRPC 401) and note in `README.md` that names come from
+post titles with a local-override layer.
+
+### Suggested order
+
+`7.2` → `7.3` → `7.4` → `7.6` → `7.7`. (`7.1` is answered; `7.5` is deleted.)
+**7.2 + 7.3 + 7.4 alone are shippable** and deliver readable names for titled posts plus a
+decent fallback for the rest; 7.6/7.7 add the write-back that makes titles exist in the
+first place — which, for an owner who has no reason to title posts in the Civitai UI, is
+the actual point of the phase.
+
+---
+
+### ✅ Side finding — RESOLVED 2026-07-29: collector tRPC access is healthy
+
+*Kept as the record of how this was ruled out. **No action needed.***
+
+The worry was that Civitai's tRPC lockdown had silently killed buzz/collects collection.
+It has not. Three pieces of evidence, together conclusive:
+
+1. **The 401 is anonymous-only, and it is a real HTTP 401** (not a 200 carrying an error
+   body). That matters: `fetchWithRetry` throws on a non-ok response, so a rejected key
+   would produce one `Warning: Failed to fetch stats for image` line per image.
+2. **The 2026-07-29 run logged zero such warnings** across its 182-image refresh.
+3. **Buzz went 0 → 8712 and collects 0 → 2091 between the 2026-02-08 and 2026-07-29 runs.**
+   Neither field has any REST source — `image.get` is the only place they come from. They
+   could not have grown unless the key was being accepted.
+
+Conclusion: `CIVITAI_API_KEY` is honoured on tRPC. Only unauthenticated callers get the
+"Please use the public API instead" 401.
+
+**Two consequences for this phase:**
+
+- **7.3 should try tRPC `post.get` with the API key first**, and fall back to HTML scraping
+  only if that 401s. A tRPC call is a few hundred bytes against ~110 KB for a post page —
+  roughly a 100× saving on the backfill, which turns a multi-day drip into a single run.
+- 7.7's write path is still unproven: reads authenticate with a Bearer key, but a *mutation*
+  needs the user's session cookie. Capturing the real request from DevTools remains required.
+
+<details>
+<summary>Original concern (superseded)</summary>
+
+How the collector gets its numbers today, in two steps:
+
+| Step | Endpoint | What it yields |
+|---|---|---|
+| Bulk discovery | REST `/api/v1/images?username=…` | likes, hearts, laughs, cries, comments — but **stale**, and no buzz/collects/views |
+| Per-image refresh | **tRPC** `image.get` | the accurate numbers, and the *only* source of **buzz, collects, views** |
+
+So every buzz and collect figure in the extension comes from tRPC, one call per image.
+
+**What changed:** as of 2026-07-29, calling tRPC `image.get` without credentials returns
+`401 UNAUTHORIZED — "Please use the public API instead"`. Civitai appears to have closed
+tRPC to outside callers. The collector authenticates with `CIVITAI_API_KEY`, and whether
+a Bearer key is still accepted **could not be tested** (the key is a GitHub secret).
+
+**Why it would be silent.** `fetchImageStats` wraps the call in a try/catch that logs a
+warning and returns `null` (`fetch-stats.js:154-157`). On `null`, `refreshImageStats`
+counts the image as "unchanged" and moves on. The run then completes, passes its integrity
+check, and updates the gist as usual. On top of that, the never-decrease clamp means the
+old buzz/collect values are carried forward rather than dropping to zero — so the charts
+would show **flat lines**, not a crash. Nothing anywhere goes red.
+
+**How to check — in order of effort:**
+
+1. Open the latest `Collect Civitai Stats` Actions run and search the log for
+   `Warning: Failed to fetch stats for image`. A handful is normal noise; hundreds or
+   thousands means tRPC is rejecting the key.
+2. In the extension, pick an image you know has recently received tips or collects and see
+   whether its buzz/collects have moved at all in the last weeks while likes kept rising.
+3. Definitive, from the browser, **logged in on `civitai.com`** (this also tells us whether
+   7.7's write-back path is viable, since it proves tRPC works from a session):
+
+   ```js
+   const input = encodeURIComponent(JSON.stringify({ json: { id: 114507519 } }));
+   const r = await fetch(`/api/trpc/image.get?input=${input}`, { credentials: 'include' });
+   console.log(r.status, JSON.stringify((await r.json())?.result?.data?.json?.stats));
+   ```
+
+   Stats object → tRPC still works from a logged-in session (good news for 7.7).
+   `401` → tRPC is closed to everyone and **7.7 must be rebuilt** around the post *editor
+   form* rather than a tRPC mutation.
+
+**If the key is being rejected**, the fix is a separate task from Phase 7: either restore a
+working credential, or fall back to REST-only collection and accept that buzz/collects
+freeze (they have no REST source at all). Decide before building 7.7, because 7.7 assumes
+tRPC mutations work.
+
+</details>
+
+---
+
+### Unresolved / needs a decision
+
+1. Gist size: `postTitles` adds roughly one short entry per post (~6.5k entries). Small
+   next to the snapshot arrays, but worth measuring against the 1 MB truncation threshold.
+2. Should a local rename that was *not* pushed still be exported/synced across devices?
+   Currently `chrome.storage.local` is per-device by design.
+3. When the user later edits a post title on Civitai directly, the cached `postTitles`
+   entry goes stale until the monthly re-check. Acceptable, or force a re-read of any post
+   the extension has written to?
+
 ## Suggested order & dependencies
 
 ```
@@ -113,6 +409,8 @@ Phase 0 ─┐
 Phase 1 ─┼─► Phase 2 (codec) ─► Phase 3 (efficiency)
          │                    └► Phase 5 (extension-first) ─► Phase 6
          └─► Phase 4 (charts, independent) ──────────────────┘
+
+Phase 7 (names) — needs only 7.1's answer to start; independent of 2–6.
 ```
 
 - Phases 0–1 first: small, kills real bugs, no design decisions.
