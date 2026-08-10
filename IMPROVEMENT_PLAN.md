@@ -26,7 +26,7 @@ All in `scripts/fetch-stats.js` unless noted.
 | 1.2 | ✅ Tier escalation only once per day | In `getRefreshTier()`, return `monthly`/`quarterly` only when `now.getUTCHours() === 0`; other hours on the 1st behave as `daily`. Manual override unchanged. | S |
 | 1.3 | ✅ Workflow concurrency group | Add `concurrency: { group: collect-stats, cancel-in-progress: false }` to `.github/workflows/collect-stats.yml`. | S |
 | 1.4 | ✅ Compact JSON output | `JSON.stringify(data)` (no indent) in `updateGist`. Log size before/after on first deploy to confirm the win. | S |
-| 1.5 | ✅ Append-only integrity check | Destructive retention is no longer called by the collector. Before writing, require every prior image and aggregate snapshot timestamp/resolved value to remain unchanged, every image id and post-title key to remain, and exact snapshot-count accounting. Address storage growth only through the versioned, backup-first migration in 3.3. | M |
+| 1.5 | ✅ Policy-aware integrity check | Preserve the original hourly → six-hour → daily retention behavior. Before writing, require exact `before + added - retained-away = candidate` accounting, recompute required survivors with the shared retention policy, value-check every survivor, and preserve every image id and post-title key. Reject removals outside the policy. | M |
 | 1.6 | ✅ Escape hatch for the ratchet | Add `RESET_IMAGE_IDS` env (comma-separated ids): for listed images, skip the `Math.max` clamp for one run so a corrupted inflated value can be corrected. Document in README troubleshooting. | M |
 | 1.7 | ✅ Demote permanently-zero images | If an image has 0 total reactions **and** `createdAt` older than 30 days, refresh it on the monthly tier only (instead of hourly forever). | S |
 

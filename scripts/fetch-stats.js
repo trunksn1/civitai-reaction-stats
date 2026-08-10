@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url';
 // files from outside the extension root.
 import SnapshotCodec from '../extension/lib/snapshot-codec.js';
 import { createTrpcHeaders, extractTrpcPayload } from './lib/trpc.js';
+import { aggregateSnapshots, applyRetentionPolicy } from './lib/retention.js';
 import { assertSafeTransition, inspectStatsData } from './lib/stats-validation.js';
 
 const {
@@ -65,10 +66,6 @@ const MAX_RETRIES = 3;
 const INITIAL_BACKOFF_MS = 1000;
 const STATS_FETCH_DELAY_MS = 300; // Delay between individual image stats fetches
 const STATS_BATCH_SIZE = 5; // Number of concurrent stats fetches
-
-// Data retention thresholds
-const HOURLY_RETENTION_DAYS = 7;
-const SIX_HOUR_RETENTION_DAYS = 30;
 
 function parseBoundedNumber(value, fallback, min, max) {
   if (value == null || value === '') return fallback;
@@ -965,77 +962,6 @@ async function updateGist(data) {
   }
 }
 
-/**
- * Aggregate snapshots to reduce data size
- * Groups snapshots into intervals and takes the last value in each interval
- */
-function aggregateSnapshots(snapshots, intervalHours) {
-  if (snapshots.length === 0) return [];
-
-  const intervalMs = intervalHours * 60 * 60 * 1000;
-  const aggregated = [];
-  let currentBucket = null;
-  let currentBucketStart = null;
-
-  for (const snapshot of snapshots) {
-    const timestamp = new Date(snapshot.timestamp).getTime();
-    const bucketStart = Math.floor(timestamp / intervalMs) * intervalMs;
-
-    if (currentBucketStart !== bucketStart) {
-      if (currentBucket) {
-        aggregated.push(currentBucket);
-      }
-      currentBucketStart = bucketStart;
-    }
-    // Always keep the latest snapshot in the bucket
-    currentBucket = snapshot;
-  }
-
-  if (currentBucket) {
-    aggregated.push(currentBucket);
-  }
-
-  return aggregated;
-}
-
-/**
- * Apply data retention policy to snapshots
- */
-function applyRetentionPolicy(snapshots, now = Date.now()) {
-  const hourlyThreshold = now - (HOURLY_RETENTION_DAYS * 24 * 60 * 60 * 1000);
-  const sixHourThreshold = now - (SIX_HOUR_RETENTION_DAYS * 24 * 60 * 60 * 1000);
-
-  // Separate snapshots into retention buckets
-  const hourlySnapshots = [];
-  const sixHourSnapshots = [];
-  const dailySnapshots = [];
-
-  for (const snapshot of snapshots) {
-    const timestamp = new Date(snapshot.timestamp).getTime();
-
-    if (timestamp >= hourlyThreshold) {
-      // Last 7 days: keep hourly
-      hourlySnapshots.push(snapshot);
-    } else if (timestamp >= sixHourThreshold) {
-      // 7-30 days: aggregate to 6-hour intervals
-      sixHourSnapshots.push(snapshot);
-    } else {
-      // Beyond 30 days: aggregate to daily
-      dailySnapshots.push(snapshot);
-    }
-  }
-
-  // Aggregate older data
-  const aggregatedSixHour = aggregateSnapshots(sixHourSnapshots, 6);
-  const aggregatedDaily = aggregateSnapshots(dailySnapshots, 24);
-
-  // Combine all snapshots, sorted by timestamp
-  const result = [...aggregatedDaily, ...aggregatedSixHour, ...hourlySnapshots];
-  result.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-  return result;
-}
-
 // Snapshot delta helpers (isDelta / resolveSnapshot / resolveAllSnapshots /
 // encodeAsDeltas) come from the shared codec imported at the top of this file:
 // extension/lib/snapshot-codec.js — one FIELDS table, used by collector AND extension.
@@ -1044,8 +970,9 @@ function applyRetentionPolicy(snapshots, now = Date.now()) {
  * Process images and create current snapshot
  * Merges new snapshot data with existing image snapshots
  */
-function processImages(apiImages, existingImages = []) {
-  const timestamp = new Date().toISOString();
+function processImages(apiImages, existingImages = [], now = new Date()) {
+  const timestamp = now.toISOString();
+  const retentionReferenceTime = now.getTime();
 
   // Create a map of existing images for quick lookup
   const existingImageMap = new Map(existingImages.map(img => [img.id, img]));
@@ -1060,9 +987,10 @@ function processImages(apiImages, existingImages = []) {
   let totalCollects = 0;
   let totalViews = 0;
 
-  // Bookkeeping for the integrity check in main(): snapshots may only be
-  // added (new data point), never removed from history.
+  // Bookkeeping for the integrity check in main(): every count change must be
+  // explained by a new observation or the documented retention policy.
   let snapshotsAdded = 0;
+  let retentionRemoved = 0;
 
   const images = apiImages.map(img => {
     const apiLikes = img.stats?.likeCount || 0;
@@ -1151,15 +1079,19 @@ function processImages(apiImages, existingImages = []) {
       }
     }
 
-    // Resolve and re-encode without downsampling. Every stored observation is
-    // part of the collected dataset and must survive an ordinary run.
-    const resolvedSnapshots = resolveAllSnapshots(snapshots);
+    // Resolve, apply the documented age-based retention policy, then re-encode.
+    let resolvedSnapshots = resolveAllSnapshots(snapshots);
+    const beforeRetention = resolvedSnapshots.length;
+    resolvedSnapshots = applyRetentionPolicy(resolvedSnapshots, retentionReferenceTime);
+    const removedForImage = beforeRetention - resolvedSnapshots.length;
+    retentionRemoved += removedForImage;
     snapshots = encodeAsDeltas(resolvedSnapshots);
-    const expectedForImage = storedSnapshotCount + addedForImage;
+    const expectedForImage = storedSnapshotCount + addedForImage - removedForImage;
     if (snapshots.length !== expectedForImage) {
       throw new Error(
         `Image ${img.id} snapshot accounting failed: ${storedSnapshotCount} stored + ` +
-        `${addedForImage} added != ${snapshots.length} candidate`
+        `${addedForImage} added - ${removedForImage} retained-away != ` +
+        `${snapshots.length} candidate`
       );
     }
 
@@ -1247,7 +1179,7 @@ function processImages(apiImages, existingImages = []) {
     imageCount: images.length
   };
 
-  return { images, totalSnapshot, snapshotsAdded };
+  return { images, totalSnapshot, snapshotsAdded, retentionRemoved };
 }
 
 /**
@@ -1309,8 +1241,9 @@ async function main() {
       (sum, img) => sum + (img.snapshots?.length || 0), 0);
 
     // Process images with existing data to merge snapshots
-    const { images, totalSnapshot, snapshotsAdded } =
+    const { images, totalSnapshot, snapshotsAdded, retentionRemoved } =
       processImages(apiImages, existingData.images);
+    const retentionReferenceTime = Date.parse(totalSnapshot.timestamp);
 
     console.log('\nSnapshot created:');
     console.log(`  Images: ${totalSnapshot.imageCount}`);
@@ -1360,7 +1293,8 @@ async function main() {
       existingData.totalSnapshots.push(totalSnapshot);
     }
 
-    // Resolve/re-encode totals without downsampling historical observations.
+    // Resolve, apply the same retention policy to totals, and re-encode.
+    const totalSnapshotsBeforeRetention = existingData.totalSnapshots.length;
     let resolvedTotal = resolveAllSnapshots(existingData.totalSnapshots);
     // Preserve imageCount through resolve/encode cycle
     for (let i = 0; i < resolvedTotal.length; i++) {
@@ -1368,12 +1302,17 @@ async function main() {
         resolvedTotal[i].imageCount = existingData.totalSnapshots[i].imageCount;
       }
     }
+    resolvedTotal = applyRetentionPolicy(resolvedTotal, retentionReferenceTime);
+    const totalRetentionRemoved = totalSnapshotsBeforeRetention - resolvedTotal.length;
     existingData.totalSnapshots = encodeAsDeltas(resolvedTotal);
     // Re-attach imageCount to encoded snapshots
     for (let i = 0; i < existingData.totalSnapshots.length; i++) {
       if (resolvedTotal[i]?.imageCount != null) {
         existingData.totalSnapshots[i].imageCount = resolvedTotal[i].imageCount;
       }
+    }
+    if (totalRetentionRemoved > 0) {
+      console.log(`\nRetention policy (total): removed ${totalRetentionRemoved} superseded observations`);
     }
     // Resolve post titles (best-effort — names are cosmetic, never worth
     // failing a stats run over).
@@ -1396,11 +1335,11 @@ async function main() {
     // floor means the merge dropped history — abort before overwriting.
     const postMergeSnapshotCount = images.reduce(
       (sum, img) => sum + (img.snapshots?.length || 0), 0);
-    const expectedSnapshotCount = preMergeSnapshotCount + snapshotsAdded;
+    const expectedSnapshotCount = preMergeSnapshotCount + snapshotsAdded - retentionRemoved;
 
     console.log('\nData integrity check:');
     console.log(`  Image snapshots before merge: ${preMergeSnapshotCount}`);
-    console.log(`  Added this run: ${snapshotsAdded}`);
+    console.log(`  Added this run: ${snapshotsAdded}, removed by retention: ${retentionRemoved}`);
     console.log(`  Image snapshots after merge: ${postMergeSnapshotCount} (expected: ${expectedSnapshotCount})`);
 
     if (postMergeSnapshotCount !== expectedSnapshotCount) {
@@ -1409,7 +1348,8 @@ async function main() {
       console.error('DATA LOSS DETECTED!');
       console.error('═══════════════════════════════════════════════════════════');
       console.error(`Expected: ${expectedSnapshotCount} image snapshots`);
-      console.error(`  (${preMergeSnapshotCount} before + ${snapshotsAdded} added)`);
+      console.error(`  (${preMergeSnapshotCount} before + ${snapshotsAdded} added - ` +
+        `${retentionRemoved} retained-away)`);
       console.error(`Actual: ${postMergeSnapshotCount}`);
       console.error('');
       console.error('This indicates a critical bug in data merging.');
@@ -1421,7 +1361,10 @@ async function main() {
 
     console.log('✓ Data integrity check: PASSED');
 
-    const transition = assertSafeTransition(originalData, existingData);
+    const transition = assertSafeTransition(originalData, existingData, {
+      retentionReferenceTime,
+      candidateTimestamp: totalSnapshot.timestamp
+    });
     console.log('Candidate transition check:');
     console.log(`  Images: ${transition.before.images} -> ${transition.after.images}`);
     console.log(`  Post titles: ${transition.before.postTitles} -> ${transition.after.postTitles}`);
@@ -1448,5 +1391,6 @@ export {
   applyRetentionPolicy,
   determineRefreshTier,
   extractPostTitleFromHtml,
+  processImages,
   retryAfterDelayMs
 };
