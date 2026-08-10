@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { assertSafeTransition, inspectStatsData } from './lib/stats-validation.js';
+import { applyRetentionPolicy } from './lib/retention.js';
 
 function image(id, likes = 1) {
   return {
@@ -41,6 +42,13 @@ assert.throws(
   /changed likes/
 );
 assert.throws(
+  () => assertSafeTransition(
+    { ...before, totalSnapshots: [{ ...before.totalSnapshots[0], imageCount: 1 }] },
+    { ...before, totalSnapshots: [{ ...before.totalSnapshots[0], imageCount: 2 }] }
+  ),
+  /changed imageCount/
+);
+assert.throws(
   () => assertSafeTransition(after, {
     ...after,
     images: [{ ...after.images[0], snapshots: after.images[0].snapshots.slice(1) }, image(2)]
@@ -61,6 +69,62 @@ assert.throws(
 assert.throws(
   () => inspectStatsData({ ...before, images: [{ id: '1', snapshots: [] }] }),
   /image 1 has no snapshots/
+);
+
+const retentionReferenceTime = Date.parse('2026-08-10T12:00:00.000Z');
+const candidateTimestamp = '2026-08-10T12:00:00.000Z';
+const retentionHistory = [
+  { timestamp: '2026-07-10T01:00:00.000Z', likes: 1 },
+  { timestamp: '2026-07-10T20:00:00.000Z', likes: 2 },
+  { timestamp: '2026-08-01T01:00:00.000Z', likes: 3 },
+  { timestamp: '2026-08-01T02:00:00.000Z', likes: 4 },
+  { timestamp: '2026-08-09T01:00:00.000Z', likes: 5 }
+];
+const retainedHistory = applyRetentionPolicy(retentionHistory, retentionReferenceTime);
+const candidateHistory = [
+  ...retainedHistory,
+  { timestamp: candidateTimestamp, likes: 6 }
+];
+const retentionBefore = {
+  username: 'test',
+  totalSnapshots: retentionHistory,
+  images: [{ id: 'retained', snapshots: retentionHistory }],
+  postTitles: {}
+};
+const retentionAfter = {
+  ...retentionBefore,
+  lastUpdated: candidateTimestamp,
+  totalSnapshots: candidateHistory,
+  images: [{ id: 'retained', snapshots: candidateHistory }]
+};
+
+assert.throws(
+  () => assertSafeTransition(retentionBefore, retentionAfter),
+  /lost snapshots/
+);
+assert.equal(
+  assertSafeTransition(retentionBefore, retentionAfter, {
+    retentionReferenceTime,
+    candidateTimestamp
+  }).after.imageSnapshots,
+  candidateHistory.length
+);
+assert.throws(
+  () => assertSafeTransition(retentionBefore, {
+    ...retentionAfter,
+    images: [{ id: 'retained', snapshots: candidateHistory.slice(1) }]
+  }, { retentionReferenceTime, candidateTimestamp }),
+  /dropped required snapshot/
+);
+assert.throws(
+  () => assertSafeTransition(retentionBefore, {
+    ...retentionAfter,
+    images: [{
+      id: 'retained',
+      snapshots: [...candidateHistory, { timestamp: '2026-08-05T00:00:00.000Z', likes: 6 }]
+    }]
+  }, { retentionReferenceTime, candidateTimestamp }),
+  /introduced unexpected snapshot/
 );
 
 console.log('All stats-validation tests passed');

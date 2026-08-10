@@ -3,6 +3,7 @@ import {
   applyRetentionPolicy,
   determineRefreshTier,
   extractPostTitleFromHtml,
+  processImages,
   retryAfterDelayMs
 } from './fetch-stats.js';
 
@@ -29,6 +30,25 @@ for (let daysAgo = 40; daysAgo >= 0; daysAgo--) {
 const retained = applyRetentionPolicy(snapshots, now);
 assert.ok(retained.length < snapshots.length, 'retention removes older detail');
 assert.ok(retained.some(s => Date.parse(s.timestamp) >= now - 7 * 86400000), 'recent snapshots remain');
+
+const processed = processImages([{
+  id: 'retention-test',
+  stats: { likeCount: 3 },
+  meta: {},
+  url: 'https://example.invalid/image.jpg',
+  createdAt: '2026-07-01T00:00:00.000Z',
+  host: 'com'
+}], [{
+  id: 'retention-test',
+  snapshots: [
+    { timestamp: '2026-07-10T01:00:00.000Z', likes: 1 },
+    { timestamp: '2026-07-10T20:00:00.000Z', likes: 2 },
+    { timestamp: '2026-08-09T01:00:00.000Z', likes: 3 }
+  ]
+}], new Date(now));
+assert.equal(processed.snapshotsAdded, 0);
+assert.equal(processed.retentionRemoved, 1);
+assert.equal(processed.images[0].snapshots.length, 2);
 
 const payload = {
   props: {
