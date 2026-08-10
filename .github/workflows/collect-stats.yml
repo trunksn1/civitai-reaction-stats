@@ -15,6 +15,28 @@ on:
           - daily
           - monthly
           - quarterly
+      reset-image-ids:
+        description: 'Comma-separated image IDs whose never-decrease clamp is bypassed this run (fixes inflated stats)'
+        required: false
+        default: ''
+      post-title-budget:
+        description: 'Max post titles to resolve this run (blank = 300). Raise for a one-off backfill.'
+        required: false
+        default: ''
+      dry-run:
+        description: 'Validate and export before/after datasets without updating the Gist'
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+# A slow run (e.g. quarterly refresh) must never overlap the next hourly run:
+# both would read the gist, then last-write-wins would silently drop a snapshot.
+concurrency:
+  group: collect-stats
+  cancel-in-progress: false
 
 jobs:
   collect:
@@ -22,17 +44,20 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: scripts/package-lock.json
 
       - name: Install dependencies
         run: cd scripts && npm ci
+
+      - name: Run collector safety tests
+        run: cd scripts && npm test
 
       - name: Fetch and update stats
         run: node scripts/fetch-stats.js
@@ -43,3 +68,19 @@ jobs:
           CIVITAI_API_KEY: ${{ secrets.CIVITAI_API_KEY }}
           CIVITAI_RED_API_KEY: ${{ secrets.CIVITAI_RED_API_KEY }}
           REFRESH_TIER: ${{ github.event.inputs.refresh-tier || 'auto' }}
+          RESET_IMAGE_IDS: ${{ github.event.inputs.reset-image-ids || '' }}
+          # Blank is fine — the collector falls back to its own default (300).
+          POST_TITLE_BUDGET: ${{ github.event.inputs.post-title-budget || '' }}
+          # Manual dispatches default to read-only. Scheduled runs keep writing
+          # only after every integrity/transition check passes.
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run || false }}
+          SAFETY_EXPORT_DIR: ${{ runner.temp }}/civitai-stats-safety
+
+      - name: Upload dry-run safety datasets
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.dry-run }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: civitai-stats-dry-run-${{ github.run_id }}
+          path: ${{ runner.temp }}/civitai-stats-safety/*.json
+          if-no-files-found: error
+          retention-days: 30

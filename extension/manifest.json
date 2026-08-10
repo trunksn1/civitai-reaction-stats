@@ -3,9 +3,10 @@
   "name": "Civitai Reaction Stats",
   "version": "1.0.0",
   "description": "Track reaction statistics for your Civitai images over time",
-  "permissions": ["storage", "scripting"],
+  "permissions": ["storage"],
   "host_permissions": [
     "https://civitai.com/*",
+    "https://civitai.red/*",
     "https://gist.githubusercontent.com/*"
   ],
   "background": {
@@ -13,7 +14,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://civitai.com/*"],
+      "matches": ["https://civitai.com/*", "https://civitai.red/*"],
       "js": ["content/content.js"],
       "css": ["content/content.css"],
       "run_at": "document_end"

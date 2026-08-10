@@ -53,8 +53,8 @@ function isValidGistUrl(url) {
 
   try {
     const parsed = new URL(url);
-    return parsed.hostname === 'gist.githubusercontent.com' ||
-           parsed.hostname === 'gist.github.com';
+    return parsed.protocol === 'https:' &&
+           parsed.hostname === 'gist.githubusercontent.com';
   } catch {
     return false;
   }
@@ -67,7 +67,7 @@ async function saveSettings() {
   const gistUrl = gistUrlInput.value.trim();
 
   if (gistUrl && !isValidGistUrl(gistUrl)) {
-    showMessage('Please enter a valid Gist URL', 'error');
+    showMessage('Please enter the raw gist.githubusercontent.com stats.json URL', 'error');
     return;
   }
 

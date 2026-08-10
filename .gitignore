@@ -3,7 +3,6 @@ node_modules/
 collect/
 latest_log/
 old/
-docs/
 *.txt
 stats.json
 PLAN.md
@@ -15,3 +14,10 @@ PLAN.md
 # Logs & archives
 *.log
 *.zip
+
+# Generated analysis output (viewer.html ships an embedded sample; real runs
+# write these locally and are loaded via the file picker / http)
+analysis/posting-analysis.json
+analysis/posting-raw.json
+analysis/*-raw.json
+analysis/baseline-checkpoint.json

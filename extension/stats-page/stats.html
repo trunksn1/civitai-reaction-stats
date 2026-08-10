@@ -139,6 +139,21 @@
           <h2 class="widget-title">Top movers <span class="widget-sub">last 7 days</span></h2>
           <div class="top-movers" id="topMovers"></div>
         </div>
+        <div class="card overview-widget widget-wide">
+          <h2 class="widget-title">Reaction distribution <span class="widget-sub">images per reaction bracket</span></h2>
+          <div class="activity-chart-wrapper">
+            <canvas id="distributionChart"></canvas>
+          </div>
+          <div class="widget-footnote" id="distributionNote"></div>
+        </div>
+        <div class="card overview-widget">
+          <h2 class="widget-title">Hall of fame <span class="widget-sub">reaction personality</span></h2>
+          <div class="top-movers" id="hallOfFame"></div>
+        </div>
+        <div class="card overview-widget">
+          <h2 class="widget-title">On this day <span class="widget-sub">in earlier years</span></h2>
+          <div class="top-movers" id="onThisDay"></div>
+        </div>
       </section>
       </section><!-- /tab-overview -->
 
@@ -167,7 +182,11 @@
               <button class="chart-type-btn" data-type="bar" title="Bar chart">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="12" width="4" height="9"/><rect x="10" y="7" width="4" height="14"/><rect x="17" y="3" width="4" height="18"/></svg>
               </button>
+              <button class="chart-type-btn" data-type="area" title="Stacked area (AoE2-style timeline)">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M3 21V14l5-6 5 4 8-8v17z" opacity="0.45"/><path d="M3 21v-4l5-3 5 2 8-6v11z"/></svg>
+              </button>
             </div>
+            <button class="chart-type-btn log-scale-btn" id="logScaleBtn" title="Logarithmic scale (cumulative mode)">log</button>
             <div class="line-toggles" id="lineToggles">
               <label class="toggle-label">
                 <input type="checkbox" data-line="total" checked>
@@ -185,22 +204,27 @@
                 &#x2764;&#xFE0F;
               </label>
               <label class="toggle-label">
-                <input type="checkbox" data-line="laughs" checked>
+                <input type="checkbox" data-line="laughs">
                 <span class="toggle-dot laughs"></span>
                 &#x1F604;
               </label>
               <label class="toggle-label">
-                <input type="checkbox" data-line="cries" checked>
+                <input type="checkbox" data-line="cries">
                 <span class="toggle-dot cries"></span>
                 &#x1F622;
               </label>
               <label class="toggle-label">
-                <input type="checkbox" data-line="buzz" checked>
+                <input type="checkbox" data-line="comments">
+                <span class="toggle-dot comments"></span>
+                &#x1F4AC;
+              </label>
+              <label class="toggle-label">
+                <input type="checkbox" data-line="buzz">
                 <span class="toggle-dot buzz"></span>
                 &#x26A1;
               </label>
               <label class="toggle-label">
-                <input type="checkbox" data-line="collects" checked>
+                <input type="checkbox" data-line="collects">
                 <span class="toggle-dot collects"></span>
                 &#x1F516;
               </label>
@@ -258,6 +282,24 @@
 
       <!-- Images Tab -->
       <section class="tab-panel" id="tab-images" hidden>
+      <!-- AoE2-style stacked timeline: each image is a colored band -->
+      <section class="card chart-section images-timeline-section">
+        <div class="chart-header">
+          <h2>Reactions Timeline</h2>
+          <span class="widget-sub" id="timelineSub">each colored band is one image — top 12 by reactions, rest as "Other"</span>
+          <div class="time-selector" id="timelineRangeSelector">
+            <button class="time-btn" data-range="1d">1D</button>
+            <button class="time-btn" data-range="7d">7D</button>
+            <button class="time-btn" data-range="30d">30D</button>
+            <button class="time-btn" data-range="90d">90D</button>
+            <button class="time-btn" data-range="1y">1Y</button>
+            <button class="time-btn active" data-range="all">All</button>
+          </div>
+        </div>
+        <div class="chart-container">
+          <canvas id="imagesTimelineChart"></canvas>
+        </div>
+      </section>
       <!-- Images Section -->
       <section class="card images-section">
         <div class="images-header">
@@ -294,19 +336,23 @@
               <span class="toggle-dot hearts"></span>&#x2764;&#xFE0F;
             </label>
             <label class="toggle-label">
-              <input type="checkbox" data-line="laughs" checked>
+              <input type="checkbox" data-line="laughs">
               <span class="toggle-dot laughs"></span>&#x1F604;
             </label>
             <label class="toggle-label">
-              <input type="checkbox" data-line="cries" checked>
+              <input type="checkbox" data-line="cries">
               <span class="toggle-dot cries"></span>&#x1F622;
             </label>
             <label class="toggle-label">
-              <input type="checkbox" data-line="buzz" checked>
+              <input type="checkbox" data-line="comments">
+              <span class="toggle-dot comments"></span>&#x1F4AC;
+            </label>
+            <label class="toggle-label">
+              <input type="checkbox" data-line="buzz">
               <span class="toggle-dot buzz"></span>&#x26A1;
             </label>
             <label class="toggle-label">
-              <input type="checkbox" data-line="collects" checked>
+              <input type="checkbox" data-line="collects">
               <span class="toggle-dot collects"></span>&#x1F516;
             </label>
           </div>
@@ -323,6 +369,8 @@
   </div>
 
   <script src="../lib/chart.min.js"></script>
+  <script src="../lib/snapshot-codec.js"></script>
+  <script src="../lib/safe-values.js"></script>
   <script src="stats.js"></script>
 </body>
 </html>

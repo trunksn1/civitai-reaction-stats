@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: scripts/package-lock.json
+
+      - name: Install collector dependencies
+        working-directory: scripts
+        run: npm ci
+
+      - name: Run unit tests
+        working-directory: scripts
+        run: npm test
+
+      - name: Check JavaScript syntax
+        run: |
+          node --check scripts/fetch-stats.js
+          node --check analysis/analyze-posting-times.js
+          node --check extension/service-worker.js
+          node --check extension/content/content.js
+          node --check extension/popup/popup.js
+          node --check extension/stats-page/stats.js
+
+      - name: Exercise posting-time analyzer with synthetic data
+        run: node analysis/analyze-posting-times.js --sample
+        env:
+          OUT: ${{ runner.temp }}/posting-analysis.json

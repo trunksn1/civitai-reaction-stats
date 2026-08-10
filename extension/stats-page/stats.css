@@ -423,6 +423,7 @@ body {
 .toggle-dot.hearts { background-color: var(--color-hearts); }
 .toggle-dot.laughs { background-color: var(--color-laughs); }
 .toggle-dot.cries { background-color: var(--color-cries); }
+.toggle-dot.comments { background-color: var(--color-comments); }
 .toggle-dot.buzz { background-color: var(--color-buzz); }
 .toggle-dot.collects { background-color: var(--color-collects); }
 
@@ -1271,4 +1272,68 @@ body {
   .overview-widget.widget-wide {
     grid-column: span 1;
   }
+}
+
+/* --- Phase 4 additions ------------------------------------------------- */
+
+/* Log-scale toggle (text variant of chart-type-btn) */
+.log-scale-btn {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  padding: 4px 8px;
+}
+
+/* Always-visible total-reactions sparkline on image cards */
+.image-sparkline-wrap {
+  height: 36px;
+  margin-top: 8px;
+  opacity: 0.85;
+}
+.image-sparkline-wrap canvas {
+  width: 100% !important;
+  height: 36px !important;
+}
+
+/* Overview widget extras (distribution / hall of fame / on this day) */
+.widget-footnote {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-muted, #909296);
+  text-align: center;
+}
+.mover-detail {
+  font-size: 11px;
+  color: var(--text-muted, #909296);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Inline rename (display-only custom image names) */
+.image-rename-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 2px;
+  opacity: 0.35;
+  vertical-align: middle;
+}
+.image-rename-btn:hover {
+  opacity: 1;
+}
+.image-name-input {
+  width: 100%;
+  background: var(--bg-primary, #1a1b1e);
+  color: var(--text-primary, #c1c2c5);
+  border: 1px solid #373a40;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 13px;
+  font-family: inherit;
+}
+.image-name-input:focus {
+  outline: none;
+  border-color: var(--color-total, #be4bdb);
 }

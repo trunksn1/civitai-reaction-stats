@@ -5,7 +5,7 @@
 
 const STATS_ITEM_ID = 'civitai-stats-menu-item';
 let observerActive = false;
-const DEBUG = true; // Enable debug logging
+const DEBUG = false; // Enable debug logging
 
 /**
  * Debug logger
@@ -216,8 +216,9 @@ function setupObserver() {
  * Initialize the content script
  */
 function init() {
-  // Only run on civitai.com
-  if (!window.location.hostname.includes('civitai.com')) {
+  // Only run on civitai.com / civitai.red
+  if (!window.location.hostname.includes('civitai.com') &&
+      !window.location.hostname.includes('civitai.red')) {
     return;
   }
 

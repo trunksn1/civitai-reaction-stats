@@ -4,7 +4,9 @@
   "description": "Fetches Civitai reaction stats and stores them in a GitHub Gist",
   "type": "module",
   "scripts": {
-    "fetch": "node fetch-stats.js"
+    "fetch": "node fetch-stats.js",
+    "test": "node test-codec.js && node test-trpc.js && node test-safe-values.js && node test-stats-validation.js && node test-collector-core.js",
+    "validate:stats": "node validate-stats-file.js"
   },
   "dependencies": {
     "@octokit/rest": "^20.0.2"

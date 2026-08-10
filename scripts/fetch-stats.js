@@ -1,4 +1,21 @@
 import { Octokit } from '@octokit/rest';
+import { createHash } from 'node:crypto';
+import { mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+// Shared snapshot codec — same file the extension loads (single source of truth
+// for the delta format). Lives under extension/lib/ because Chrome cannot load
+// files from outside the extension root.
+import SnapshotCodec from '../extension/lib/snapshot-codec.js';
+import { createTrpcHeaders, extractTrpcPayload } from './lib/trpc.js';
+import { assertSafeTransition, inspectStatsData } from './lib/stats-validation.js';
+
+const {
+  isDelta,
+  resolveAt: resolveSnapshot,
+  resolveAll: resolveAllSnapshots,
+  encodeAsDeltas
+} = SnapshotCodec;
 
 // Environment variables
 const GIST_ID = process.env.GIST_ID;
@@ -10,29 +27,27 @@ const CIVITAI_API_KEY = process.env.CIVITAI_API_KEY; // Optional - may help get 
 const CIVITAI_RED_API_KEY = process.env.CIVITAI_RED_API_KEY || process.env.CIVITAI_API_KEY;
 const CIVITAI_RED_ENABLED = (process.env.CIVITAI_RED_ENABLED || 'true').toLowerCase() !== 'false';
 const REFRESH_TIER_OVERRIDE = process.env.REFRESH_TIER; // Optional: 'auto', 'daily', 'monthly', 'quarterly'
+const DRY_RUN = (process.env.DRY_RUN || '').toLowerCase() === 'true';
+const SAFETY_EXPORT_DIR = process.env.SAFETY_EXPORT_DIR || '';
+// Escape hatch for the never-decrease clamp: images listed here (comma-separated
+// IDs) take the API's fresh values as-is for this run, so an inflated stat that
+// got baked in by the clamp can be corrected. See README "Fixing inflated stats".
+const RESET_IMAGE_IDS = new Set(
+  (process.env.RESET_IMAGE_IDS || '').split(',').map(s => s.trim()).filter(Boolean)
+);
+// Force a full discovery sweep (all pages, all NSFW levels, both hosts) on a
+// daily-tier run. Monthly/quarterly tiers and first runs always sweep fully.
+const FULL_DISCOVERY = (process.env.FULL_DISCOVERY || '').toLowerCase() === 'true';
+// How many post titles to resolve per run. Titles are used to give images a
+// human name in the extension; unresolved posts are retried on later runs, so
+// the initial backfill drains over a few runs instead of blowing one up.
+const POST_TITLE_BUDGET = parseBoundedNumber(process.env.POST_TITLE_BUDGET, 300, 0, 10000);
+const REQUEST_TIMEOUT_MS = parseBoundedNumber(process.env.REQUEST_TIMEOUT_MS, 30000, 1000, 120000);
+const MAX_REFRESH_FAILURE_RATIO = parseBoundedNumber(
+  process.env.MAX_REFRESH_FAILURE_RATIO, 0.25, 0, 1
+);
 
-// Validate required environment variables
-if (!GIST_ID || !GIST_TOKEN || !CIVITAI_USERNAME) {
-  console.error('Missing required environment variables:');
-  if (!GIST_ID) console.error('  - GIST_ID');
-  if (!GIST_TOKEN) console.error('  - GIST_TOKEN');
-  if (!CIVITAI_USERNAME) console.error('  - CIVITAI_USERNAME');
-  process.exit(1);
-}
-
-if (CIVITAI_API_KEY) {
-  console.log('Using Civitai API key for authenticated requests');
-} else {
-  console.log('No CIVITAI_API_KEY set - using unauthenticated requests');
-}
-
-if (CIVITAI_RED_ENABLED) {
-  console.log(`civitai.red capture: enabled${process.env.CIVITAI_RED_API_KEY ? ' (dedicated key)' : ' (using .com key)'}`);
-} else {
-  console.log('civitai.red capture: disabled');
-}
-
-const octokit = new Octokit({ auth: GIST_TOKEN });
+let octokit = null;
 
 // Constants
 const CIVITAI_API_BASE = 'https://civitai.com/api/v1';
@@ -55,10 +70,55 @@ const STATS_BATCH_SIZE = 5; // Number of concurrent stats fetches
 const HOURLY_RETENTION_DAYS = 7;
 const SIX_HOUR_RETENTION_DAYS = 30;
 
+function parseBoundedNumber(value, fallback, min, max) {
+  if (value == null || value === '') return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
+    throw new Error(`Invalid numeric configuration "${value}"; expected ${min}..${max}`);
+  }
+  return parsed;
+}
+
+function validateRuntimeConfig() {
+  const missing = [];
+  if (!GIST_ID) missing.push('GIST_ID');
+  if (!GIST_TOKEN) missing.push('GIST_TOKEN');
+  if (!CIVITAI_USERNAME) missing.push('CIVITAI_USERNAME');
+  if (missing.length > 0) {
+    throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
+  }
+}
+
+function logRuntimeConfig() {
+  console.log(CIVITAI_API_KEY
+    ? 'Using Civitai API key for authenticated requests'
+    : 'No CIVITAI_API_KEY set - tRPC is skipped and core counters use REST fallback');
+  console.log(CIVITAI_RED_ENABLED
+    ? `civitai.red capture: enabled${process.env.CIVITAI_RED_API_KEY ? ' (dedicated key)' : ' (using .com key)'}`
+    : 'civitai.red capture: disabled');
+  if (RESET_IMAGE_IDS.size > 0) {
+    console.log(`Clamp reset requested for ${RESET_IMAGE_IDS.size} image(s): ${[...RESET_IMAGE_IDS].join(', ')}`);
+  }
+  if (DRY_RUN) console.log('DRY RUN: the collector will validate and export data but will not update the Gist');
+}
+
 /**
  * Fetch with exponential backoff retry
  */
-async function fetchWithRetry(url, retries = MAX_RETRIES, backoff = INITIAL_BACKOFF_MS) {
+function retryAfterDelayMs(value, fallback) {
+  if (!value) return fallback;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const dateDelay = Date.parse(value) - Date.now();
+  return Number.isFinite(dateDelay) ? Math.max(0, dateDelay) : fallback;
+}
+
+async function fetchWithRetry(
+  url,
+  retries = MAX_RETRIES,
+  backoff = INITIAL_BACKOFF_MS,
+  extraHeaders = {}
+) {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const headers = {};
@@ -68,12 +128,16 @@ async function fetchWithRetry(url, retries = MAX_RETRIES, backoff = INITIAL_BACK
       if (key) {
         headers['Authorization'] = `Bearer ${key}`;
       }
-      const response = await fetch(url, { headers });
+      Object.assign(headers, extraHeaders);
+      const response = await fetch(url, {
+        headers,
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+      });
 
       if (response.status === 429) {
         // Rate limited - wait and retry
         const retryAfter = response.headers.get('Retry-After');
-        const waitTime = retryAfter ? parseInt(retryAfter) * 1000 : backoff;
+        const waitTime = retryAfterDelayMs(retryAfter, backoff);
         console.log(`Rate limited. Waiting ${waitTime}ms before retry ${attempt}/${retries}`);
         await sleep(waitTime);
         backoff *= 2;
@@ -81,12 +145,15 @@ async function fetchWithRetry(url, retries = MAX_RETRIES, backoff = INITIAL_BACK
       }
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        const error = new Error(`HTTP ${response.status}: ${response.statusText}`);
+        error.status = response.status;
+        error.retryable = response.status === 408 || response.status >= 500;
+        throw error;
       }
 
       return await response.json();
     } catch (error) {
-      if (attempt === retries) {
+      if (attempt === retries || error.retryable === false) {
         throw error;
       }
       console.log(`Attempt ${attempt} failed: ${error.message}. Retrying in ${backoff}ms...`);
@@ -94,6 +161,9 @@ async function fetchWithRetry(url, retries = MAX_RETRIES, backoff = INITIAL_BACK
       backoff *= 2;
     }
   }
+  // Only reachable when every attempt hit a 429 (the catch path rethrows on the
+  // last attempt). Fail loudly instead of returning undefined.
+  throw new Error(`Rate limited after ${retries} retries: ${url}`);
 }
 
 function sleep(ms) {
@@ -101,33 +171,250 @@ function sleep(ms) {
 }
 
 /**
- * Fetch stats for a single image by ID using the tRPC API.
- * The tRPC endpoint returns additional fields (buzz, collects, views)
- * that the public REST API does not expose.
+ * Fetch stats for a single image. Authenticated tRPC is preferred because it
+ * includes buzz/collects/views; REST is a safe fallback for the core counters.
  */
-async function fetchImageStats(imageId, host = 'com') {
+async function fetchImageStatsViaTrpc(imageId, host) {
   const input = { json: { id: Number(imageId) } };
   const url = `${siteOriginForHost(host)}/api/trpc/image.get?input=${encodeURIComponent(JSON.stringify(input))}`;
-  try {
-    const data = await fetchWithRetry(url);
-    const item = data?.result?.data?.json;
-    if (item && item.stats) {
-      const s = item.stats;
-      return {
-        likeCount: s.likeCountAllTime || 0,
-        heartCount: s.heartCountAllTime || 0,
-        laughCount: s.laughCountAllTime || 0,
-        cryCount: s.cryCountAllTime || 0,
-        commentCount: s.commentCountAllTime || 0,
-        buzzCount: s.tippedAmountCountAllTime || 0,
-        collectCount: s.collectedCountAllTime || 0,
-        viewCount: s.viewCountAllTime || 0
-      };
+  const key = host === 'red' ? CIVITAI_RED_API_KEY : CIVITAI_API_KEY;
+  const data = await fetchWithRetry(
+    url, MAX_RETRIES, INITIAL_BACKOFF_MS, createTrpcHeaders(siteOriginForHost(host), key)
+  );
+  const item = extractTrpcPayload(data);
+  if (!item?.stats) throw new Error('unexpected tRPC image.get response shape');
+  const s = item.stats;
+  return {
+    likeCount: s.likeCountAllTime || 0,
+    heartCount: s.heartCountAllTime || 0,
+    laughCount: s.laughCountAllTime || 0,
+    cryCount: s.cryCountAllTime || 0,
+    commentCount: s.commentCountAllTime || 0,
+    buzzCount: s.tippedAmountCountAllTime || 0,
+    collectCount: s.collectedCountAllTime || 0,
+    viewCount: s.viewCountAllTime || 0,
+    _source: 'trpc',
+    _host: host
+  };
+}
+
+async function fetchImageStatsViaRest(imageId, host) {
+  const url = `${apiBaseForHost(host)}/images?imageId=${encodeURIComponent(imageId)}`;
+  const data = await fetchWithRetry(url);
+  const item = data?.items?.[0];
+  if (!item?.stats) throw new Error('unexpected REST image response shape');
+  return {
+    likeCount: item.stats.likeCount || 0,
+    heartCount: item.stats.heartCount || 0,
+    laughCount: item.stats.laughCount || 0,
+    cryCount: item.stats.cryCount || 0,
+    commentCount: item.stats.commentCount || 0,
+    _source: 'rest',
+    _host: host
+  };
+}
+
+async function fetchImageStats(imageId, host = 'com') {
+  const key = host === 'red' ? CIVITAI_RED_API_KEY : CIVITAI_API_KEY;
+  const failures = [];
+
+  if (key) {
+    try {
+      return await fetchImageStatsViaTrpc(imageId, host);
+    } catch (error) {
+      failures.push(`tRPC ${host}: ${error.message}`);
     }
-  } catch (error) {
-    console.log(`  Warning: Failed to fetch stats for image ${imageId}: ${error.message}`);
   }
+
+  const restHosts = [host];
+  if (CIVITAI_RED_ENABLED) restHosts.push(host === 'red' ? 'com' : 'red');
+  for (let i = 0; i < restHosts.length; i++) {
+    const restHost = restHosts[i];
+    try {
+      return await fetchImageStatsViaRest(imageId, restHost);
+    } catch (error) {
+      failures.push(`REST ${restHost}: ${error.message}`);
+      // Only a 404 suggests the record may have moved to the other host.
+      if (error.status !== 404) break;
+    }
+  }
+
+  console.log(`  Warning: Failed to fetch stats for image ${imageId}: ${failures.join('; ')}`);
   return null;
+}
+
+/**
+ * Post titles — the source of human-readable image names in the extension.
+ *
+ * Two ways in, cheapest first:
+ *   1. tRPC `post.get`, which needs a Civitai API key. A few hundred bytes.
+ *   2. Scraping the post page's embedded Next.js payload. ~110KB per post, so
+ *      only used when tRPC is unavailable (it 401s for unauthenticated callers).
+ *
+ * Availability is cached per host. A definitive auth/shape failure costs one
+ * probe; transient failures fall back for that post without disabling tRPC for
+ * the rest of the run.
+ */
+const trpcPostGetAvailability = new Map();
+
+async function fetchPostTitleViaTrpc(postId, host) {
+  const input = { json: { id: Number(postId) } };
+  const url = `${siteOriginForHost(host)}/api/trpc/post.get?input=${encodeURIComponent(JSON.stringify(input))}`;
+  const key = host === 'red' ? CIVITAI_RED_API_KEY : CIVITAI_API_KEY;
+  if (!key) throw new Error('no API key available for tRPC post.get');
+  const data = await fetchWithRetry(
+    url, MAX_RETRIES, INITIAL_BACKOFF_MS, createTrpcHeaders(siteOriginForHost(host), key)
+  );
+  const post = extractTrpcPayload(data);
+  if (!post) throw new Error('unexpected tRPC response shape');
+  // A post with no title yields null — a valid, cacheable answer, not a failure.
+  return typeof post.title === 'string' && post.title.trim() ? post.title.trim() : null;
+}
+
+/**
+ * Pull the title out of a post page's __NEXT_DATA__ blob.
+ *
+ * Match the cached query by `state.data.id`, NOT by array index: index 0 has
+ * been observed to be the site-wide announcement banner, whose title would
+ * otherwise be silently adopted as the post's name.
+ */
+function extractPostTitleFromHtml(html, postId) {
+  const match = html.match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/);
+  if (!match) return { ok: false, reason: 'no __NEXT_DATA__' };
+
+  let parsed;
+  try {
+    parsed = JSON.parse(match[1]);
+  } catch {
+    return { ok: false, reason: 'unparseable __NEXT_DATA__' };
+  }
+
+  const queries = parsed?.props?.pageProps?.trpcState?.json?.queries || [];
+  for (const query of queries) {
+    const data = query?.state?.data;
+    if (data && Number(data.id) === Number(postId)) {
+      const title = typeof data.title === 'string' && data.title.trim() ? data.title.trim() : null;
+      return { ok: true, title };
+    }
+  }
+  return { ok: false, reason: 'no query matched the post id' };
+}
+
+async function fetchPostTitleViaHtml(postId, host) {
+  const response = await fetch(`${siteOriginForHost(host)}/posts/${postId}`, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; civitai-reaction-stats)' },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const result = extractPostTitleFromHtml(await response.text(), postId);
+  if (!result.ok) throw new Error(result.reason);
+  return result.title;
+}
+
+/**
+ * Resolve one post's title. Returns { title } on success (title may be null for
+ * an untitled post) or null when the post could not be read at all — the caller
+ * distinguishes the two so "untitled" gets cached and "failed" gets retried.
+ */
+async function fetchPostTitle(postId, host = 'com') {
+  const key = host === 'red' ? CIVITAI_RED_API_KEY : CIVITAI_API_KEY;
+  const availability = trpcPostGetAvailability.get(host);
+  if (key && availability !== false) {
+    try {
+      const title = await fetchPostTitleViaTrpc(postId, host);
+      if (availability == null) {
+        trpcPostGetAvailability.set(host, true);
+        console.log(`  Post titles (${host}): using tRPC post.get`);
+      }
+      return { title };
+    } catch (error) {
+      const definitive = [401, 403, 404].includes(error.status) ||
+        error.message.includes('unexpected tRPC');
+      if (definitive) {
+        trpcPostGetAvailability.set(host, false);
+        console.log(`  Post titles (${host}): tRPC unavailable (${error.message}) — using page scraping`);
+      } else {
+        console.log(`  Post titles (${host}): transient tRPC failure (${error.message}) — scraping this post`);
+      }
+      // fall through to the HTML path
+    }
+  }
+
+  try {
+    return { title: await fetchPostTitleViaHtml(postId, host) };
+  } catch (error) {
+    console.log(`  Warning: could not read title for post ${postId}: ${error.message}`);
+    return null;
+  }
+}
+
+/**
+ * Resolve titles for posts we don't have yet, newest images first, up to a
+ * per-run budget. Existing entries are kept; re-checks happen on escalated
+ * tiers only, since titles rarely change.
+ */
+async function refreshPostTitles(images, existingPostTitles, tier) {
+  const postTitles = { ...(existingPostTitles || {}) };
+
+  // One representative host per post, newest first — a post's images share a host.
+  const seen = new Map();
+  const ordered = [...images].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  for (const img of ordered) {
+    if (img.postId == null) continue;
+    const key = String(img.postId);
+    if (!seen.has(key)) seen.set(key, img.host || 'com');
+  }
+
+  // Posts we've never resolved always come first. On an escalated tier we also
+  // re-check known ones, but only with whatever budget is left over — otherwise
+  // a re-check sweep spends the entire budget re-reading titles we already have
+  // while images with no name at all keep waiting.
+  const unresolved = [];
+  const resolved = [];
+  for (const entry of seen.entries()) {
+    (entry[0] in postTitles ? resolved : unresolved).push(entry);
+  }
+
+  const recheck = tier === 'monthly' || tier === 'quarterly';
+  const pending = recheck ? [...unresolved, ...resolved] : unresolved;
+
+  if (pending.length === 0) {
+    console.log(`\nPost titles: ${Object.keys(postTitles).length} known, nothing new to resolve`);
+    return postTitles;
+  }
+
+  const budgeted = pending.slice(0, POST_TITLE_BUDGET);
+  const newInBatch = budgeted.filter(([postId]) => !(postId in postTitles)).length;
+  console.log(`\nResolving post titles: ${budgeted.length} of ${pending.length} pending ` +
+    `(${newInBatch} never seen, ${budgeted.length - newInBatch} re-checks; budget ${POST_TITLE_BUDGET}, tier: ${tier})`);
+
+  let titled = 0;
+  let untitled = 0;
+  let failed = 0;
+
+  for (let i = 0; i < budgeted.length; i++) {
+    const [postId, host] = budgeted[i];
+    const result = await fetchPostTitle(postId, host);
+
+    if (result) {
+      postTitles[postId] = { title: result.title, fetchedAt: new Date().toISOString() };
+      if (result.title) titled++;
+      else untitled++;
+    } else {
+      failed++; // left absent so a later run retries it
+    }
+
+    // Page scraping is ~110KB a pop; pace it. tRPC is cheap enough to go faster.
+    if (i < budgeted.length - 1) {
+      await sleep(trpcPostGetAvailability.get(host) === true ? 150 : 500);
+    }
+  }
+
+  const remaining = pending.length - budgeted.length;
+  console.log(`Post titles: ${titled} titled, ${untitled} untitled, ${failed} failed` +
+    (remaining > 0 ? ` — ${remaining} left for the next run` : ''));
+
+  return postTitles;
 }
 
 /**
@@ -136,25 +423,36 @@ async function fetchImageStats(imageId, host = 'com') {
  * - Monthly (1st of month): also images from 1-6 months ago
  * - Quarterly (1st of month in Jan/Apr/Jul/Oct): ALL images
  */
-function getRefreshTier() {
-  // Check for manual override from workflow_dispatch input
-  if (REFRESH_TIER_OVERRIDE && REFRESH_TIER_OVERRIDE !== 'auto') {
-    console.log(`Using manual refresh tier override: ${REFRESH_TIER_OVERRIDE}`);
-    return REFRESH_TIER_OVERRIDE;
+function determineRefreshTier(now = new Date(), override = null) {
+  if (override && override !== 'auto') {
+    if (!['daily', 'monthly', 'quarterly'].includes(override)) {
+      throw new Error(`Invalid refresh tier override: ${override}`);
+    }
+    return override;
   }
 
-  // Auto: determine tier based on date
-  const now = new Date();
-  const dayOfMonth = now.getDate();
-  const month = now.getMonth(); // 0-indexed
+  // Auto: determine tier based on date (UTC — matches the Actions cron).
+  // Escalated tiers fire only at hour 0: the job runs hourly and would
+  // otherwise repeat the expensive full refresh 24 times on tier days.
+  const dayOfMonth = now.getUTCDate();
+  const month = now.getUTCMonth(); // 0-indexed
+  const hour = now.getUTCHours();
 
-  if (dayOfMonth === 1 && month % 3 === 0) {
+  if (dayOfMonth === 1 && hour === 0 && month % 3 === 0) {
     return 'quarterly';
   }
-  if (dayOfMonth === 1) {
+  if (dayOfMonth === 1 && hour === 0) {
     return 'monthly';
   }
   return 'daily';
+}
+
+function getRefreshTier() {
+  const tier = determineRefreshTier(new Date(), REFRESH_TIER_OVERRIDE);
+  if (REFRESH_TIER_OVERRIDE && REFRESH_TIER_OVERRIDE !== 'auto') {
+    console.log(`Using manual refresh tier override: ${tier}`);
+  }
+  return tier;
 }
 
 /**
@@ -162,8 +460,7 @@ function getRefreshTier() {
  * The Civitai bulk API returns stale stats, so we re-fetch individually
  * on a smart schedule to keep stats fresh without excessive API calls.
  */
-async function refreshImageStats(images) {
-  const tier = getRefreshTier();
+async function refreshImageStats(images, tier) {
   const now = new Date();
   const thirtyDaysAgo = new Date(now - 30 * 24 * 60 * 60 * 1000);
   const sixMonthsAgo = new Date(now - 180 * 24 * 60 * 60 * 1000);
@@ -176,9 +473,18 @@ async function refreshImageStats(images) {
                   (img.stats?.laughCount || 0) + (img.stats?.cryCount || 0);
     const createdAt = new Date(img.createdAt);
 
-    // Always: images with 0 stats or from last 30 days
-    if (total === 0 || createdAt >= thirtyDaysAgo) {
+    // Always: images from the last 30 days
+    if (createdAt >= thirtyDaysAgo) {
       toRefresh.add(img);
+      continue;
+    }
+
+    // Zero-stat images older than 30 days: refresh on the monthly tier only.
+    // (They used to be re-fetched every single hour forever, even when long dead.)
+    if (total === 0) {
+      if (tier === 'monthly' || tier === 'quarterly') {
+        toRefresh.add(img);
+      }
       continue;
     }
 
@@ -205,6 +511,9 @@ async function refreshImageStats(images) {
 
   let updated = 0;
   let unchanged = 0;
+  let failed = 0;
+  let trpcSuccesses = 0;
+  let restFallbacks = 0;
 
   // Process in batches to avoid overwhelming the API
   for (let i = 0; i < refreshList.length; i += STATS_BATCH_SIZE) {
@@ -217,30 +526,50 @@ async function refreshImageStats(images) {
     for (let j = 0; j < batch.length; j++) {
       const stats = results[j];
       if (stats) {
+        const resetRequested = RESET_IMAGE_IDS.has(String(batch[j].id));
+        if (resetRequested && stats._source !== 'trpc') {
+          throw new Error(
+            `Clamp reset for image ${batch[j].id} requires a complete tRPC response; ` +
+            `refusing partial ${stats._source || 'unknown'} data`
+          );
+        }
+        if (stats._source === 'trpc') trpcSuccesses++;
+        if (stats._source === 'rest') restFallbacks++;
+        if (stats._host) batch[j].host = stats._host;
+        const cleanStats = { ...stats };
+        delete cleanStats._source;
+        delete cleanStats._host;
         const bulkStats = batch[j].stats || {};
         // Keep the higher value for each field — individual refresh should
-        // correct understated bulk stats, not overwrite with stale/lower values
-        const mergedStats = {
-          likeCount: Math.max(stats.likeCount || 0, bulkStats.likeCount || 0),
-          heartCount: Math.max(stats.heartCount || 0, bulkStats.heartCount || 0),
-          laughCount: Math.max(stats.laughCount || 0, bulkStats.laughCount || 0),
-          cryCount: Math.max(stats.cryCount || 0, bulkStats.cryCount || 0),
-          commentCount: Math.max(stats.commentCount || 0, bulkStats.commentCount || 0),
-          buzzCount: Math.max(stats.buzzCount || 0, bulkStats.buzzCount || 0),
-          collectCount: Math.max(stats.collectCount || 0, bulkStats.collectCount || 0),
-          viewCount: Math.max(stats.viewCount || 0, bulkStats.viewCount || 0),
+        // correct understated bulk stats, not overwrite with stale/lower values.
+        // Exception: a requested clamp reset trusts the fresh fetch as-is.
+        const mergedStats = resetRequested ? cleanStats : {
+          likeCount: Math.max(cleanStats.likeCount || 0, bulkStats.likeCount || 0),
+          heartCount: Math.max(cleanStats.heartCount || 0, bulkStats.heartCount || 0),
+          laughCount: Math.max(cleanStats.laughCount || 0, bulkStats.laughCount || 0),
+          cryCount: Math.max(cleanStats.cryCount || 0, bulkStats.cryCount || 0),
+          commentCount: Math.max(cleanStats.commentCount || 0, bulkStats.commentCount || 0),
+          buzzCount: Math.max(cleanStats.buzzCount || 0, bulkStats.buzzCount || 0),
+          collectCount: Math.max(cleanStats.collectCount || 0, bulkStats.collectCount || 0),
+          viewCount: Math.max(cleanStats.viewCount || 0, bulkStats.viewCount || 0),
         };
         const oldTotal = (bulkStats.likeCount || 0) + (bulkStats.heartCount || 0) +
                          (bulkStats.laughCount || 0) + (bulkStats.cryCount || 0);
         const newTotal = (mergedStats.likeCount || 0) + (mergedStats.heartCount || 0) +
                          (mergedStats.laughCount || 0) + (mergedStats.cryCount || 0);
         batch[j].stats = mergedStats;
+        // A successful individual refresh counts as "seen this run", even if
+        // bulk discovery skipped this image (incremental mode).
+        if (batch[j]._synthesized) {
+          delete batch[j]._synthesized;
+        }
         if (newTotal !== oldTotal) {
           updated++;
         } else {
           unchanged++;
         }
       } else {
+        failed++;
         unchanged++;
       }
     }
@@ -260,6 +589,20 @@ async function refreshImageStats(images) {
   console.log(`\nIndividual stats refresh complete:`);
   console.log(`  Stats changed: ${updated}`);
   console.log(`  Unchanged: ${unchanged}`);
+  console.log(`  Sources: ${trpcSuccesses} tRPC, ${restFallbacks} REST fallback, ${failed} failed`);
+
+  // A few deleted/migrating images are normal. A broad tRPC fallback or fetch
+  // failure is not: extended counters would silently freeze while the workflow
+  // still looked green. Abort before building or writing a candidate dataset.
+  const degraded = failed + (CIVITAI_API_KEY ? restFallbacks : 0);
+  const degradedRatio = degraded / refreshList.length;
+  if (refreshList.length >= 10 && degradedRatio > MAX_REFRESH_FAILURE_RATIO) {
+    throw new Error(
+      `Individual refresh health check failed: ${degraded}/${refreshList.length} ` +
+      `(${(degradedRatio * 100).toFixed(1)}%) failed or fell back; limit is ` +
+      `${(MAX_REFRESH_FAILURE_RATIO * 100).toFixed(1)}%`
+    );
+  }
 
   return images;
 }
@@ -267,7 +610,7 @@ async function refreshImageStats(images) {
 /**
  * Fetch all pages from a paginated API URL
  */
-async function fetchAllPages(startUrl, label) {
+async function fetchAllPages(startUrl, label, stopAtKnownIds = null) {
   const allItems = [];
   let nextPage = startUrl;
   let pageCount = 0;
@@ -281,6 +624,13 @@ async function fetchAllPages(startUrl, label) {
     if (data.items && data.items.length > 0) {
       allItems.push(...data.items);
       console.log(`    Retrieved ${data.items.length} images (total: ${allItems.length})`);
+
+      // Incremental discovery: results are sorted Newest-first, so once an
+      // entire page is already-known images, all later pages are known too.
+      if (stopAtKnownIds && data.items.every(item => stopAtKnownIds.has(String(item.id)))) {
+        console.log(`    [${label}] Page ${pageCount} contains only known images — stopping early`);
+        break;
+      }
     }
 
     nextPage = data.metadata?.nextPage || null;
@@ -324,7 +674,7 @@ function mergeDiscoveredImage(a, b) {
  * Fetch all of a user's images from a single host, paginating each NSFW level.
  * Tags each returned image with its host ('com' | 'red').
  */
-async function fetchUserImagesFromHost(username, host) {
+async function fetchUserImagesFromHost(username, host, stopAtKnownIds = null) {
   const baseUrl = `${apiBaseForHost(host)}/images?username=${encodeURIComponent(username)}&limit=${IMAGES_PER_PAGE}&sort=Newest&period=AllTime`;
 
   const nsfwLevels = [
@@ -336,7 +686,7 @@ async function fetchUserImagesFromHost(username, host) {
 
   const results = [];
   for (const { param, label } of nsfwLevels) {
-    const images = await fetchAllPages(`${baseUrl}${param}`, `${host}:${label}`);
+    const images = await fetchAllPages(`${baseUrl}${param}`, `${host}:${label}`, stopAtKnownIds);
     results.push({ label, count: images.length, images });
   }
 
@@ -354,18 +704,30 @@ async function fetchUserImagesFromHost(username, host) {
   return Array.from(imageMap.values());
 }
 
-async function fetchAllUserImages(username) {
+async function fetchAllUserImages(username, existingImages = []) {
   console.log(`Fetching images for user: ${username}`);
 
+  // Incremental discovery: plain hourly (daily-tier) runs only need to find
+  // NEW image IDs — each paginated stream stops at the first page made
+  // entirely of known images. Known images that pagination doesn't reach are
+  // synthesized from stored data below; their stat freshness comes from the
+  // tiered per-image refresh, not from discovery. Full sweeps (monthly and
+  // quarterly tiers, first run, or FULL_DISCOVERY=true) paginate everything
+  // and are the only runs that can mark images stale.
+  const tier = getRefreshTier();
+  const fullSweep = tier !== 'daily' || FULL_DISCOVERY || existingImages.length === 0;
+  const knownIds = fullSweep ? null : new Set(existingImages.map(img => String(img.id)));
+  console.log(`Discovery mode: ${fullSweep ? 'full sweep' : `incremental (${knownIds.size} known images)`}`);
+
   // .com discovery is required.
-  const comImages = await fetchUserImagesFromHost(username, 'com');
+  const comImages = await fetchUserImagesFromHost(username, 'com', knownIds);
 
   // .red discovery (R-and-harder content moved here). Best-effort: a failure
   // must not abort the whole run, otherwise a .red outage would lose .com data.
   let redImages = [];
   if (CIVITAI_RED_ENABLED) {
     try {
-      redImages = await fetchUserImagesFromHost(username, 'red');
+      redImages = await fetchUserImagesFromHost(username, 'red', knownIds);
     } catch (err) {
       console.log(`\n⚠️  civitai.red discovery failed (continuing with .com only): ${err.message}`);
     }
@@ -379,6 +741,42 @@ async function fetchAllUserImages(username) {
     const existing = imageMap.get(img.id);
     imageMap.set(img.id, existing ? mergeDiscoveredImage(existing, img) : img);
   }
+
+  // Synthesize known images that incremental discovery didn't reach, so they
+  // keep flowing into totals and are not misclassified as missing/stale.
+  if (!fullSweep) {
+    let synthesized = 0;
+    for (const existing of existingImages) {
+      if (imageMap.has(Number(existing.id)) || imageMap.has(existing.id)) continue;
+      if (!existing.snapshots || existing.snapshots.length === 0) continue;
+      const last = resolveSnapshot(existing.snapshots, existing.snapshots.length - 1);
+      imageMap.set(existing.id, {
+        id: existing.id,
+        createdAt: existing.createdAt,
+        url: existing.thumbnailUrl, // API field img.url = image file (becomes thumbnailUrl)
+        meta: { prompt: existing.name },
+        host: existing.host || 'com',
+        postId: existing.postId ?? null,
+        baseModel: existing.baseModel ?? null,
+        stats: {
+          likeCount: last.likes,
+          heartCount: last.hearts,
+          laughCount: last.laughs,
+          cryCount: last.cries,
+          commentCount: last.comments,
+          buzzCount: last.buzz,
+          collectCount: last.collects,
+          viewCount: last.views
+        },
+        _synthesized: true
+      });
+      synthesized++;
+    }
+    if (synthesized > 0) {
+      console.log(`Synthesized ${synthesized} known images not reached by incremental discovery`);
+    }
+  }
+
   const allImages = Array.from(imageMap.values());
 
   console.log(`\nCombined hosts: ${comImages.length} com + ${redImages.length} red = ${allImages.length} unique images`);
@@ -407,7 +805,7 @@ async function fetchAllUserImages(username) {
   console.log(`\nBulk fetch stats: ${hasStatsCount} with reactions, ${zeroStatsCount} with 0 reactions`);
 
   // Re-fetch accurate stats using tiered schedule
-  const imagesWithStats = await refreshImageStats(publishedImages);
+  const imagesWithStats = await refreshImageStats(publishedImages, tier);
 
   console.log(`\nTotal published images: ${imagesWithStats.length}`);
   return imagesWithStats;
@@ -423,10 +821,9 @@ async function readGistData() {
 
     // Check if stats.json file exists
     if (!gist.data.files['stats.json']) {
-      console.log('Warning: stats.json file not found in Gist');
-      console.log('Available files:', Object.keys(gist.data.files).join(', '));
-      console.log('Starting with empty stats');
-      return createEmptyStats();
+      throw new Error(
+        `stats.json not found in Gist. Available files: ${Object.keys(gist.data.files).join(', ') || '(none)'}`
+      );
     }
 
     const fileData = gist.data.files['stats.json'];
@@ -462,6 +859,8 @@ async function readGistData() {
     }
 
     console.log(`Successfully read existing data: ${data.totalSnapshots.length} totalSnapshots, ${data.images.length} images`);
+    const summary = inspectStatsData(data);
+    console.log(`Validated existing data: ${summary.imageSnapshots} image snapshots, ${summary.postTitles} post titles`);
     return data;
 
   } catch (error) {
@@ -500,8 +899,20 @@ function createEmptyStats() {
     username: CIVITAI_USERNAME,
     lastUpdated: null,
     totalSnapshots: [],
-    images: []
+    images: [],
+    postTitles: {}
   };
+}
+
+async function exportSafetyArtifact(name, data) {
+  if (!SAFETY_EXPORT_DIR) return null;
+  await mkdir(SAFETY_EXPORT_DIR, { recursive: true });
+  const content = JSON.stringify(data);
+  const filePath = path.join(SAFETY_EXPORT_DIR, `${name}.json`);
+  await writeFile(filePath, content, 'utf8');
+  const sha256 = createHash('sha256').update(content).digest('hex');
+  console.log(`Safety export: ${filePath} (${(content.length / 1024).toFixed(2)} KB, sha256 ${sha256})`);
+  return { filePath, sha256, bytes: Buffer.byteLength(content) };
 }
 
 /**
@@ -509,12 +920,19 @@ function createEmptyStats() {
  */
 async function updateGist(data) {
   try {
-    const content = JSON.stringify(data, null, 2);
+    // Compact output: pretty-printing inflated the file ~2-3x, undoing the
+    // delta-encoding savings. The gist is machine-read, not human-read.
+    const content = JSON.stringify(data);
 
     console.log('\nUpdating Gist...');
     console.log(`  Data size: ${(content.length / 1024).toFixed(2)} KB`);
     console.log(`  Total snapshots: ${data.totalSnapshots.length}`);
     console.log(`  Images: ${data.images.length}`);
+
+    if (DRY_RUN) {
+      console.log('DRY RUN: Gist update skipped');
+      return;
+    }
 
     await octokit.gists.update({
       gist_id: GIST_ID,
@@ -583,8 +1001,7 @@ function aggregateSnapshots(snapshots, intervalHours) {
 /**
  * Apply data retention policy to snapshots
  */
-function applyRetentionPolicy(snapshots) {
-  const now = Date.now();
+function applyRetentionPolicy(snapshots, now = Date.now()) {
   const hourlyThreshold = now - (HOURLY_RETENTION_DAYS * 24 * 60 * 60 * 1000);
   const sixHourThreshold = now - (SIX_HOUR_RETENTION_DAYS * 24 * 60 * 60 * 1000);
 
@@ -619,119 +1036,9 @@ function applyRetentionPolicy(snapshots) {
   return result;
 }
 
-/**
- * Check if a snapshot is delta-encoded (has any d* keys)
- */
-function isDelta(snapshot) {
-  return snapshot && ('dl' in snapshot || 'dh' in snapshot ||
-         'dla' in snapshot || 'dc' in snapshot || 'dco' in snapshot ||
-         'dbu' in snapshot || 'dcol' in snapshot || 'dvi' in snapshot || '_d' in snapshot);
-}
-
-/**
- * Resolve a single snapshot at a given index to absolute values
- * by walking backward to find the nearest absolute snapshot and applying deltas forward
- */
-function resolveSnapshot(snapshots, index) {
-  let base = { likes: 0, hearts: 0, laughs: 0, cries: 0, comments: 0, buzz: 0, collects: 0, views: 0 };
-  let startIdx = 0;
-
-  for (let i = index; i >= 0; i--) {
-    if (!isDelta(snapshots[i])) {
-      base = {
-        likes: snapshots[i].likes || 0,
-        hearts: snapshots[i].hearts || 0,
-        laughs: snapshots[i].laughs || 0,
-        cries: snapshots[i].cries || 0,
-        comments: snapshots[i].comments || 0,
-        buzz: snapshots[i].buzz || 0,
-        collects: snapshots[i].collects || 0,
-        views: snapshots[i].views || 0
-      };
-      startIdx = i + 1;
-      break;
-    }
-  }
-
-  for (let i = startIdx; i <= index; i++) {
-    const s = snapshots[i];
-    if (isDelta(s)) {
-      base.likes += s.dl || 0;
-      base.hearts += s.dh || 0;
-      base.laughs += s.dla || 0;
-      base.cries += s.dc || 0;
-      base.comments += s.dco || 0;
-      base.buzz += s.dbu || 0;
-      base.collects += s.dcol || 0;
-      base.views += s.dvi || 0;
-    }
-  }
-
-  return { timestamp: snapshots[index].timestamp, ...base };
-}
-
-/**
- * Resolve all snapshots in an array to absolute values
- */
-function resolveAllSnapshots(snapshots) {
-  const result = [];
-  let current = { likes: 0, hearts: 0, laughs: 0, cries: 0, comments: 0, buzz: 0, collects: 0, views: 0 };
-
-  for (const s of snapshots) {
-    if (isDelta(s)) {
-      current = {
-        likes: current.likes + (s.dl || 0),
-        hearts: current.hearts + (s.dh || 0),
-        laughs: current.laughs + (s.dla || 0),
-        cries: current.cries + (s.dc || 0),
-        comments: current.comments + (s.dco || 0),
-        buzz: current.buzz + (s.dbu || 0),
-        collects: current.collects + (s.dcol || 0),
-        views: current.views + (s.dvi || 0)
-      };
-    } else {
-      current = {
-        likes: s.likes || 0,
-        hearts: s.hearts || 0,
-        laughs: s.laughs || 0,
-        cries: s.cries || 0,
-        comments: s.comments || 0,
-        buzz: s.buzz || 0,
-        collects: s.collects || 0,
-        views: s.views || 0
-      };
-    }
-    result.push({ timestamp: s.timestamp, ...current });
-  }
-  return result;
-}
-
-/**
- * Encode an array of absolute snapshots as deltas (first stays absolute, rest become deltas)
- */
-function encodeAsDeltas(absoluteSnapshots) {
-  if (absoluteSnapshots.length === 0) return [];
-  const result = [absoluteSnapshots[0]];
-  for (let i = 1; i < absoluteSnapshots.length; i++) {
-    const prev = absoluteSnapshots[i - 1];
-    const curr = absoluteSnapshots[i];
-    const delta = { timestamp: curr.timestamp };
-    if (curr.likes - prev.likes) delta.dl = curr.likes - prev.likes;
-    if (curr.hearts - prev.hearts) delta.dh = curr.hearts - prev.hearts;
-    if (curr.laughs - prev.laughs) delta.dla = curr.laughs - prev.laughs;
-    if (curr.cries - prev.cries) delta.dc = curr.cries - prev.cries;
-    if (curr.comments - prev.comments) delta.dco = curr.comments - prev.comments;
-    if (curr.buzz - prev.buzz) delta.dbu = curr.buzz - prev.buzz;
-    if (curr.collects - prev.collects) delta.dcol = curr.collects - prev.collects;
-    if (curr.views - prev.views) delta.dvi = curr.views - prev.views;
-    // Mark as delta even when all changes are zero, so resolvers don't mistake it for absolute
-    if (!delta.dl && !delta.dh && !delta.dla && !delta.dc && !delta.dco && !delta.dbu && !delta.dcol && !delta.dvi) {
-      delta._d = 1;
-    }
-    result.push(delta);
-  }
-  return result;
-}
+// Snapshot delta helpers (isDelta / resolveSnapshot / resolveAllSnapshots /
+// encodeAsDeltas) come from the shared codec imported at the top of this file:
+// extension/lib/snapshot-codec.js — one FIELDS table, used by collector AND extension.
 
 /**
  * Process images and create current snapshot
@@ -753,6 +1060,10 @@ function processImages(apiImages, existingImages = []) {
   let totalCollects = 0;
   let totalViews = 0;
 
+  // Bookkeeping for the integrity check in main(): snapshots may only be
+  // added (new data point), never removed from history.
+  let snapshotsAdded = 0;
+
   const images = apiImages.map(img => {
     const apiLikes = img.stats?.likeCount || 0;
     const apiHearts = img.stats?.heartCount || 0;
@@ -766,21 +1077,29 @@ function processImages(apiImages, existingImages = []) {
     // Get existing image data if available
     const existingImage = existingImageMap.get(String(img.id));
     let snapshots = existingImage?.snapshots || [];
+    const storedSnapshotCount = snapshots.length;
+    let addedForImage = 0;
 
     // Determine previous absolute values (resolve last snapshot if it's a delta)
     const lastSnapshot = snapshots.length > 0
       ? resolveSnapshot(snapshots, snapshots.length - 1)
       : null;
 
-    // Clamp: never let stats decrease due to stale bulk API data
-    const likes = Math.max(apiLikes, lastSnapshot?.likes || 0);
-    const hearts = Math.max(apiHearts, lastSnapshot?.hearts || 0);
-    const laughs = Math.max(apiLaughs, lastSnapshot?.laughs || 0);
-    const cries = Math.max(apiCries, lastSnapshot?.cries || 0);
-    const comments = Math.max(apiComments, lastSnapshot?.comments || 0);
-    const buzz = Math.max(apiBuzz, lastSnapshot?.buzz || 0);
-    const collects = Math.max(apiCollects, lastSnapshot?.collects || 0);
-    const views = Math.max(apiViews, lastSnapshot?.views || 0);
+    // Clamp: never let stats decrease due to stale bulk API data.
+    // Skipped for images with a requested clamp reset, so a previously
+    // baked-in inflated value can come back down to the real one.
+    const resetClamp = RESET_IMAGE_IDS.has(String(img.id));
+    if (resetClamp) {
+      console.log(`  Clamp reset for image ${img.id}: accepting API values as-is`);
+    }
+    const likes = resetClamp ? apiLikes : Math.max(apiLikes, lastSnapshot?.likes || 0);
+    const hearts = resetClamp ? apiHearts : Math.max(apiHearts, lastSnapshot?.hearts || 0);
+    const laughs = resetClamp ? apiLaughs : Math.max(apiLaughs, lastSnapshot?.laughs || 0);
+    const cries = resetClamp ? apiCries : Math.max(apiCries, lastSnapshot?.cries || 0);
+    const comments = resetClamp ? apiComments : Math.max(apiComments, lastSnapshot?.comments || 0);
+    const buzz = resetClamp ? apiBuzz : Math.max(apiBuzz, lastSnapshot?.buzz || 0);
+    const collects = resetClamp ? apiCollects : Math.max(apiCollects, lastSnapshot?.collects || 0);
+    const views = resetClamp ? apiViews : Math.max(apiViews, lastSnapshot?.views || 0);
 
     if (lastSnapshot && (apiLikes < lastSnapshot.likes || apiHearts < lastSnapshot.hearts ||
         apiLaughs < lastSnapshot.laughs || apiCries < lastSnapshot.cries || apiComments < lastSnapshot.comments)) {
@@ -811,6 +1130,8 @@ function processImages(apiImages, existingImages = []) {
       if (!lastSnapshot) {
         // First snapshot — store absolute
         snapshots.push({ timestamp, likes, hearts, laughs, cries, comments, buzz, collects, views });
+        snapshotsAdded++;
+        addedForImage++;
       } else {
         // Subsequent snapshot — store as delta
         const delta = { timestamp };
@@ -824,14 +1145,23 @@ function processImages(apiImages, existingImages = []) {
         if (views - lastSnapshot.views) delta.dvi = views - lastSnapshot.views;
         if (Object.keys(delta).length > 1) {
           snapshots.push(delta);
+          snapshotsAdded++;
+          addedForImage++;
         }
       }
     }
 
-    // Apply retention: resolve to absolute first, retain, then re-encode as deltas
-    let resolvedSnapshots = resolveAllSnapshots(snapshots);
-    resolvedSnapshots = applyRetentionPolicy(resolvedSnapshots);
+    // Resolve and re-encode without downsampling. Every stored observation is
+    // part of the collected dataset and must survive an ordinary run.
+    const resolvedSnapshots = resolveAllSnapshots(snapshots);
     snapshots = encodeAsDeltas(resolvedSnapshots);
+    const expectedForImage = storedSnapshotCount + addedForImage;
+    if (snapshots.length !== expectedForImage) {
+      throw new Error(
+        `Image ${img.id} snapshot accounting failed: ${storedSnapshotCount} stored + ` +
+        `${addedForImage} added != ${snapshots.length} candidate`
+      );
+    }
 
     const host = img.host || 'com';
     return {
@@ -841,8 +1171,15 @@ function processImages(apiImages, existingImages = []) {
       thumbnailUrl: img.url,
       createdAt: img.createdAt,
       host,
-      lastSeenAt: timestamp,
-      stale: false,
+      // Naming inputs for the extension: postId links to the post's title,
+      // baseModel is the fallback when a post has no title. Fall back to the
+      // stored value so an incremental run can't blank them.
+      postId: img.postId ?? existingImage?.postId ?? null,
+      baseModel: img.baseModel ?? existingImage?.baseModel ?? null,
+      // Synthesized entries (incremental discovery didn't reach them) were not
+      // actually seen by the API this run: keep their lastSeenAt and stale flag.
+      lastSeenAt: img._synthesized ? (existingImage?.lastSeenAt || null) : timestamp,
+      stale: img._synthesized ? (existingImage?.stale || false) : false,
       snapshots
     };
   });
@@ -875,6 +1212,8 @@ function processImages(apiImages, existingImages = []) {
         thumbnailUrl: existing.thumbnailUrl,
         createdAt: existing.createdAt,
         host,
+        postId: existing.postId ?? null,
+        baseModel: existing.baseModel ?? null,
         lastSeenAt: existing.lastSeenAt || null,
         stale: true,
         snapshots: existing.snapshots // keep existing snapshots as-is
@@ -908,33 +1247,40 @@ function processImages(apiImages, existingImages = []) {
     imageCount: images.length
   };
 
-  return { images, totalSnapshot };
+  return { images, totalSnapshot, snapshotsAdded };
 }
 
 /**
  * Main execution
  */
 async function main() {
-  console.log('=== Civitai Stats Collector ===');
-  console.log(`Time: ${new Date().toISOString()}`);
-  console.log(`Username: ${CIVITAI_USERNAME}`);
-  console.log('');
-  if (REFRESH_TIER_OVERRIDE && REFRESH_TIER_OVERRIDE !== 'auto') {
-    console.log(`Refresh tier override: ${REFRESH_TIER_OVERRIDE} (manually triggered)`);
-  }
-  console.log('');
-
   try {
+    validateRuntimeConfig();
+    octokit = new Octokit({ auth: GIST_TOKEN });
+
+    console.log('=== Civitai Stats Collector ===');
+    console.log(`Time: ${new Date().toISOString()}`);
+    console.log(`Username: ${CIVITAI_USERNAME}`);
+    logRuntimeConfig();
+    if (REFRESH_TIER_OVERRIDE && REFRESH_TIER_OVERRIDE !== 'auto') {
+      console.log(`Refresh tier override: ${REFRESH_TIER_OVERRIDE} (manually triggered)`);
+    }
+    console.log('');
+
+    // Read existing Gist data FIRST: fail fast on gist problems before touching
+    // the Civitai API, and feed known image IDs into incremental discovery.
+    const existingData = await readGistData();
+    const originalData = structuredClone(existingData);
+    inspectStatsData(originalData);
+    await exportSafetyArtifact('stats-before', originalData);
+
     // Fetch all user images from Civitai
-    const apiImages = await fetchAllUserImages(CIVITAI_USERNAME);
+    const apiImages = await fetchAllUserImages(CIVITAI_USERNAME, existingData.images);
 
     if (apiImages.length === 0) {
       console.log('No images found for user. Exiting.');
       return;
     }
-
-    // Read existing Gist data
-    const existingData = await readGistData();
 
     // Log the data we read for debugging
     if (existingData.totalSnapshots.length === 0 && existingData.images.length === 0) {
@@ -958,8 +1304,13 @@ async function main() {
 
     console.log(`\nExisting data: ${existingData.totalSnapshots.length} totalSnapshots, ${existingData.images.length} images`);
 
+    // Snapshot count before the merge — baseline for the integrity check below
+    const preMergeSnapshotCount = existingData.images.reduce(
+      (sum, img) => sum + (img.snapshots?.length || 0), 0);
+
     // Process images with existing data to merge snapshots
-    const { images, totalSnapshot } = processImages(apiImages, existingData.images);
+    const { images, totalSnapshot, snapshotsAdded } =
+      processImages(apiImages, existingData.images);
 
     console.log('\nSnapshot created:');
     console.log(`  Images: ${totalSnapshot.imageCount}`);
@@ -979,14 +1330,18 @@ async function main() {
       // Clamp: total should never decrease (same rationale as per-image clamping)
       // If the API missed images, the carried-forward stats (Change 2) should prevent this,
       // but this is a safety net in case anything slips through.
-      totalSnapshot.likes = Math.max(totalSnapshot.likes, prevTotal.likes);
-      totalSnapshot.hearts = Math.max(totalSnapshot.hearts, prevTotal.hearts);
-      totalSnapshot.laughs = Math.max(totalSnapshot.laughs, prevTotal.laughs);
-      totalSnapshot.cries = Math.max(totalSnapshot.cries, prevTotal.cries);
-      totalSnapshot.comments = Math.max(totalSnapshot.comments, prevTotal.comments);
-      totalSnapshot.buzz = Math.max(totalSnapshot.buzz, prevTotal.buzz || 0);
-      totalSnapshot.collects = Math.max(totalSnapshot.collects, prevTotal.collects || 0);
-      totalSnapshot.views = Math.max(totalSnapshot.views, prevTotal.views || 0);
+      // Skipped when a clamp reset was requested: the whole point of a reset run
+      // is to let a corrected (lower) image value flow into the total.
+      if (RESET_IMAGE_IDS.size === 0) {
+        totalSnapshot.likes = Math.max(totalSnapshot.likes, prevTotal.likes);
+        totalSnapshot.hearts = Math.max(totalSnapshot.hearts, prevTotal.hearts);
+        totalSnapshot.laughs = Math.max(totalSnapshot.laughs, prevTotal.laughs);
+        totalSnapshot.cries = Math.max(totalSnapshot.cries, prevTotal.cries);
+        totalSnapshot.comments = Math.max(totalSnapshot.comments, prevTotal.comments);
+        totalSnapshot.buzz = Math.max(totalSnapshot.buzz, prevTotal.buzz || 0);
+        totalSnapshot.collects = Math.max(totalSnapshot.collects, prevTotal.collects || 0);
+        totalSnapshot.views = Math.max(totalSnapshot.views, prevTotal.views || 0);
+      }
 
       const delta = { timestamp: totalSnapshot.timestamp, imageCount: totalSnapshot.imageCount };
       if (totalSnapshot.likes - prevTotal.likes) delta.dl = totalSnapshot.likes - prevTotal.likes;
@@ -1005,8 +1360,7 @@ async function main() {
       existingData.totalSnapshots.push(totalSnapshot);
     }
 
-    // Apply retention: resolve to absolute, retain, re-encode as deltas
-    const snapshotsBefore = existingData.totalSnapshots.length;
+    // Resolve/re-encode totals without downsampling historical observations.
     let resolvedTotal = resolveAllSnapshots(existingData.totalSnapshots);
     // Preserve imageCount through resolve/encode cycle
     for (let i = 0; i < resolvedTotal.length; i++) {
@@ -1014,7 +1368,6 @@ async function main() {
         resolvedTotal[i].imageCount = existingData.totalSnapshots[i].imageCount;
       }
     }
-    resolvedTotal = applyRetentionPolicy(resolvedTotal);
     existingData.totalSnapshots = encodeAsDeltas(resolvedTotal);
     // Re-attach imageCount to encoded snapshots
     for (let i = 0; i < existingData.totalSnapshots.length; i++) {
@@ -1022,10 +1375,14 @@ async function main() {
         existingData.totalSnapshots[i].imageCount = resolvedTotal[i].imageCount;
       }
     }
-    const snapshotsAfter = existingData.totalSnapshots.length;
-
-    if (snapshotsBefore !== snapshotsAfter) {
-      console.log(`\nRetention policy (total): ${snapshotsBefore} -> ${snapshotsAfter} snapshots`);
+    // Resolve post titles (best-effort — names are cosmetic, never worth
+    // failing a stats run over).
+    try {
+      existingData.postTitles = await refreshPostTitles(
+        images, existingData.postTitles, getRefreshTier());
+    } catch (error) {
+      console.log(`\n⚠️  Post title resolution failed (continuing): ${error.message}`);
+      existingData.postTitles = existingData.postTitles || {};
     }
 
     // Update images with merged snapshots
@@ -1033,44 +1390,43 @@ async function main() {
     existingData.username = CIVITAI_USERNAME;
     existingData.lastUpdated = totalSnapshot.timestamp;
 
-    // SAFETY CHECK: Prevent catastrophic data loss
-    // If we read existing data but new data has way fewer snapshots, something went wrong
-    if (snapshotsBefore > 1) { // Only check if we had meaningful existing data
-      const newImageSnapshotCount = images.reduce((sum, img) => {
-        return sum + (img.snapshots?.length || 0);
-      }, 0);
+    // SAFETY CHECK: Prevent catastrophic data loss.
+    // Exact accounting: per-image snapshots may only be added (one new data
+    // point per changed image) or removed by retention. Ending below that
+    // floor means the merge dropped history — abort before overwriting.
+    const postMergeSnapshotCount = images.reduce(
+      (sum, img) => sum + (img.snapshots?.length || 0), 0);
+    const expectedSnapshotCount = preMergeSnapshotCount + snapshotsAdded;
 
-      // For validation, we need to count what we started with
-      // We can estimate: if we had X totalSnapshots and Y images, we should have roughly similar image snapshots
-      // A more precise check: count current vs what we expect after adding one more snapshot per image
-      const expectedMinImageSnapshots = existingData.images.length; // At minimum, each image should have 1 snapshot
+    console.log('\nData integrity check:');
+    console.log(`  Image snapshots before merge: ${preMergeSnapshotCount}`);
+    console.log(`  Added this run: ${snapshotsAdded}`);
+    console.log(`  Image snapshots after merge: ${postMergeSnapshotCount} (expected: ${expectedSnapshotCount})`);
 
-      console.log('\nData integrity check:');
-      console.log(`  Total snapshots: ${existingData.totalSnapshots.length}`);
-      console.log(`  Total image snapshots: ${newImageSnapshotCount}`);
-      console.log(`  Images tracked: ${images.length}`);
-
-      // Sanity check: We should have at least as many image snapshots as images
-      // And the count should be reasonable (not drastically low)
-      if (newImageSnapshotCount < expectedMinImageSnapshots) {
-        console.error('');
-        console.error('═══════════════════════════════════════════════════════════');
-        console.error('DATA LOSS DETECTED!');
-        console.error('═══════════════════════════════════════════════════════════');
-        console.error(`Expected at least: ${expectedMinImageSnapshots} image snapshots`);
-        console.error(`Actual image snapshots: ${newImageSnapshotCount}`);
-        console.error('');
-        console.error('This indicates a critical bug in data merging.');
-        console.error('ABORTING to prevent overwriting good data with incomplete data.');
-        console.error('═══════════════════════════════════════════════════════════');
-        console.error('');
-        process.exit(1);
-      }
-
-      console.log('✓ Data integrity check: PASSED');
-    } else {
-      console.log('\nSkipping data integrity check (first run or minimal existing data)');
+    if (postMergeSnapshotCount !== expectedSnapshotCount) {
+      console.error('');
+      console.error('═══════════════════════════════════════════════════════════');
+      console.error('DATA LOSS DETECTED!');
+      console.error('═══════════════════════════════════════════════════════════');
+      console.error(`Expected: ${expectedSnapshotCount} image snapshots`);
+      console.error(`  (${preMergeSnapshotCount} before + ${snapshotsAdded} added)`);
+      console.error(`Actual: ${postMergeSnapshotCount}`);
+      console.error('');
+      console.error('This indicates a critical bug in data merging.');
+      console.error('ABORTING to prevent overwriting good data with incomplete data.');
+      console.error('═══════════════════════════════════════════════════════════');
+      console.error('');
+      process.exit(1);
     }
+
+    console.log('✓ Data integrity check: PASSED');
+
+    const transition = assertSafeTransition(originalData, existingData);
+    console.log('Candidate transition check:');
+    console.log(`  Images: ${transition.before.images} -> ${transition.after.images}`);
+    console.log(`  Post titles: ${transition.before.postTitles} -> ${transition.after.postTitles}`);
+    console.log('✓ Candidate transition check: PASSED');
+    await exportSafetyArtifact('stats-candidate', existingData);
 
     // Update Gist
     await updateGist(existingData);
@@ -1082,4 +1438,15 @@ async function main() {
   }
 }
 
-main();
+const isDirectRun = process.argv[1] &&
+  import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+
+if (isDirectRun) main();
+
+export {
+  aggregateSnapshots,
+  applyRetentionPolicy,
+  determineRefreshTier,
+  extractPostTitleFromHtml,
+  retryAfterDelayMs
+};

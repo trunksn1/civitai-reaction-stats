@@ -15,8 +15,9 @@ This project consists of two components:
 - **Interactive charts** showing reactions over time (1d, 7d, 30d, 90d, all time)
 - **Summary cards** with total likes 👍, hearts ❤️, laughs 😂, cries 😢, and comments 💬
 - **Per-image statistics** with sorting by date, reactions, or comments
+- **Readable image names** from your post titles, with a rename box for the rest
 - **Dark theme** matching Civitai's aesthetic
-- **Smart data retention** - Automatic aggregation (hourly → 6-hour → daily) to prevent Gist size growth
+- **Append-only history** - Every collected observation is preserved and verified before a write
 - **Resilient API calls** - Exponential backoff retry logic with rate limit handling
 
 ## Architecture
@@ -64,12 +65,18 @@ Chrome Extension ◄── reads ◄── gist.githubusercontent.com
 | `GIST_ID` | Your Gist ID from step 1 | ✅ Yes |
 | `GIST_TOKEN` | Your Personal Access Token from step 2 | ✅ Yes |
 | `CIVITAI_USERNAME` | Your Civitai username | ✅ Yes |
-| `CIVITAI_API_KEY` | Your Civitai API key (helps get accurate stats) | ⚠️ Optional |
+| `CIVITAI_API_KEY` | Your account-wide Civitai API key (required for live buzz/collect/view counters) | ⚠️ Recommended |
 | `CIVITAI_RED_API_KEY` | Rarely needed — your one account-wide `CIVITAI_API_KEY` already works on civitai.red. Optional override only | ⚠️ Optional |
 
-**Note:** The `CIVITAI_API_KEY` is optional but recommended. Without it, the script uses unauthenticated requests which may have lower rate limits.
+**Note:** Collection still works without `CIVITAI_API_KEY`: discovery and the
+core reaction/comment counters fall back to REST. Authenticated tRPC is required
+for live buzz, collect, and view counters; without a key those extended fields
+are carried forward at their last known values. Broad tRPC failures abort before
+the Gist write so an apparently successful run cannot silently freeze them.
 
 **civitai.red (R-rated and harder content):** Civitai moved R+ content to a separate domain, `civitai.red`. The collector now queries **both** `civitai.com` and `civitai.red` so reactions on your R+ images keep being tracked. This is on by default; set the `CIVITAI_RED_ENABLED` repo variable to `false` to disable it.
+
+**Image names:** Civitai images have no name of their own, so the extension builds one — see [How images get their names](#how-images-get-their-names). The collector resolves your post titles at up to `POST_TITLE_BUDGET` posts per run (default 300); the first backfill drains over a few runs.
 
 Civitai issues a **single account-wide API key** (civitai.com → Account settings → **API Keys**) that works on **both** domains — there is no separate "civitai.red" key. In fact bulk discovery works even with no key at all, so just leave `CIVITAI_RED_API_KEY` **unset** unless you have a specific reason to use a different key for `.red`. See [civitai.red split](#civitairred-split-r-content) below for what happens to images tracked before the split.
 
@@ -103,7 +110,7 @@ Civitai issues a **single account-wide API key** (civitai.com → Account settin
 
 By default, the stats collector runs hourly with a smart tiered refresh system:
 - **Daily**: Refreshes images from last 30 days
-- **Monthly** (1st of month): Also refreshes images from 1-6 months ago
+- **Monthly** (1st of month, 00:00 UTC run only): Also refreshes images from 1-6 months ago
 - **Quarterly** (Jan/Apr/Jul/Oct 1st): Refreshes ALL images
 
 ### Force Full Refresh for All Images
@@ -198,7 +205,7 @@ The stats are stored in your Gist as JSON with time-series data:
 - **`totalSnapshots`** - Aggregate stats across all images at each timestamp
 - **`images[].snapshots`** - Individual image stats history for charting trends
 - **Time-series data** - Every hourly run adds a new snapshot to track growth over time
-- **Automatic aggregation** - Older snapshots are automatically downsampled to save space
+- **History preservation** - Scheduled runs retain every stored observation and validate it before writing
 
 ## How the Stats Refresh System Works
 
@@ -209,8 +216,24 @@ The system uses a **smart tiered refresh strategy** to balance data freshness wi
 | Refresh Tier | When It Runs | What Gets Refreshed |
 |--------------|--------------|---------------------|
 | **Daily** | Every hour (default) | • Last 30 days of images<br>• Any images with 0 stats |
-| **Monthly** | 1st of each month | • Last 6 months of images<br>• Any images with 0 stats |
-| **Quarterly** | Jan 1, Apr 1, Jul 1, Oct 1 | • ALL images (complete refresh)<br>• Any images with 0 stats |
+| **Monthly** | 1st of each month (00:00 UTC run only) | • Last 6 months of images<br>• Older images stuck at 0 stats |
+| **Quarterly** | Jan 1, Apr 1, Jul 1, Oct 1 (00:00 UTC run only) | • ALL images (complete refresh) |
+
+**Note on 0-stat images:** images from the last 30 days are always refreshed hourly,
+including those at 0. Images older than 30 days that are still at 0 refresh on the
+monthly tier (they used to be re-fetched every hour forever).
+
+### Incremental discovery
+
+Hourly (daily-tier) runs use **incremental discovery**: since results are sorted
+newest-first, pagination stops at the first page made entirely of already-known images —
+new uploads are still found immediately, but the run no longer re-downloads the full
+gallery listing (4 NSFW levels × 2 hosts) every hour. Images beyond the stop point are
+carried from stored data, and their stat freshness comes from the tiered per-image
+refresh as always. Monthly/quarterly runs (and the first run ever) still sweep every
+page — those full sweeps are also the only runs that mark disappeared images as
+`frozen`. To force a full sweep on demand, set the `FULL_DISCOVERY=true` env var (or
+just dispatch the workflow with the `monthly` or `quarterly` tier).
 
 ### Why Tiered Refresh?
 
@@ -230,9 +253,14 @@ You can bypass the automatic schedule and force any tier manually:
 - Select your desired tier (daily/monthly/quarterly)
 - Use **quarterly** to force a complete refresh of all images anytime
 
-## Data Retention Policy
+## Historical Data Preservation
 
-To prevent your Gist from growing infinitely large, snapshots are automatically aggregated:
+Normal scheduled runs are append-only: existing aggregate and per-image
+observations must still be present with the same timestamp and counters in the
+candidate dataset. The collector aborts before writing if this invariant fails.
+
+Earlier collector versions automatically downsampled older observations using
+the following policy:
 
 | Time Period | Resolution | Example |
 |-------------|------------|---------|
@@ -240,11 +268,9 @@ To prevent your Gist from growing infinitely large, snapshots are automatically 
 | **7-30 days ago** | 6-hour intervals | Downsampled to 4 points per day |
 | **Beyond 30 days** | Daily intervals | One data point per day |
 
-**How it works:**
-- Every hour, a new snapshot is added
-- Older snapshots are automatically aggregated (keeps the last value in each time bucket)
-- This prevents exponential growth while maintaining long-term trend visibility
-- Applied to both `totalSnapshots` and individual `images[].snapshots`
+That destructive behavior is no longer called by the collector. Storage growth
+must be addressed through the versioned, backup-first storage migration tracked
+in `IMPROVEMENT_PLAN.md`, not by silently deleting historical observations.
 
 ## civitai.red split (R+ content)
 
@@ -258,6 +284,36 @@ Civitai moved R-rated-and-harder content to a separate domain, `civitai.red`. Th
 - Image links point at the correct domain (`civitai.com` or `civitai.red`).
 
 **⚠️ One-time catch-up bump:** the first successful `.red` run records each previously-frozen image at its *current* (higher) total. Because stats are stored as gains-over-time, all the reactions earned while the image was frozen appear as a **single spike** on that date. This is expected — those reactions are real, but Civitai's API never exposed *when* each one arrived, so they can't be spread across the gap.
+
+## How images get their names
+
+Civitai images have no name. The API field the extension used to lean on is the
+generation prompt, and it comes back empty for every image on this account — which
+is why every card used to read `Image 114507519`.
+
+So the extension builds a name, taking the first of these that exists:
+
+1. **A name you set on that one image** (pencil icon on the card).
+2. **A name you set on the whole post** — each image shows it as `Name — pt. 1`,
+   `Name — pt. 2`, …
+3. **The post's title on Civitai**, numbered the same way when the post holds
+   several images.
+4. **Base model and date**, e.g. `SD 1.5 · Jan 15, 2024`.
+5. `Image {id}`, if nothing else is available.
+
+Hovering a name shows where it came from, plus the post it belongs to.
+
+**Renaming is local.** Names live in `chrome.storage.local` on that browser — they
+are not written to Civitai and not synced between machines. Renaming an image that
+shares a post asks whether to name the whole post or just that one image; clearing
+the box restores the automatic name.
+
+**About `pt. 1` / `pt. 2`:** that numbering exists only in this extension. A Civitai
+post has a single title shared by all the images in it, and images have no title of
+their own, so there is no per-image name to store upstream even in principle.
+
+**Most posts have no title** (~7% of this account's do), which is why rung 4 exists —
+otherwise almost everything would still show a bare id.
 
 ## Troubleshooting
 
@@ -320,8 +376,22 @@ Civitai moved R-rated-and-harder content to a separate domain, `civitai.red`. Th
   2. Click "Run workflow" → select "quarterly" → Run
 - Check the Actions log to see which refresh tier was used
 
+### Fixing inflated stats (clamp reset)
+
+Stats are clamped to never decrease (protection against stale API data). The downside:
+if the API ever returns an inflated value once, the clamp bakes it in forever. To fix a
+specific image:
+
+1. Go to GitHub → Actions → Collect Civitai Stats → **Run workflow**
+2. In **reset-image-ids**, enter the affected image ID(s), comma-separated (e.g. `12345678,87654321`)
+3. Run the workflow
+
+For that one run, the listed images accept the API's fresh values as-is (allowed to
+decrease), and the total is recomputed without its own clamp. Afterwards the normal
+clamping resumes. Locally: `RESET_IMAGE_IDS=12345678 node fetch-stats.js` with the usual env vars.
+
 ### Some images have 0 reactions but I know they have stats
-- Images with 0 stats are always refreshed on every run
+- Images with 0 stats are refreshed hourly for their first 30 days, then monthly
 - The Civitai API sometimes returns incomplete data - this is handled by individual re-fetching
 - Force a quarterly refresh to update all images
 - Check if the image is published (scheduled/future-dated images are filtered out)
@@ -334,9 +404,13 @@ Civitai moved R-rated-and-harder content to a separate domain, `civitai.red`. Th
 civitai-reaction-stats/
 ├── .github/
 │   └── workflows/
-│       └── collect-stats.yml    # Hourly cron job
+│       ├── ci.yml               # Non-mutating tests on pushes and PRs
+│       └── collect-stats.yml    # Hourly cron + safe manual dry runs
+├── analysis/                    # Standalone posting-time study
 ├── scripts/
 │   ├── fetch-stats.js           # Main data fetcher
+│   ├── lib/                     # tRPC decoding and data validation
+│   ├── test-*.js                # Collector/codec safety tests
 │   └── package.json             # Node dependencies
 ├── extension/
 │   ├── manifest.json            # Extension manifest (MV3)
@@ -344,7 +418,7 @@ civitai-reaction-stats/
 │   ├── popup/                   # Settings popup
 │   ├── content/                 # Menu injection
 │   ├── stats-page/              # Charts and stats display
-│   ├── lib/                     # Bundled libraries (Chart.js)
+│   ├── lib/                     # Chart.js, snapshot codec, safe rendering
 │   └── icons/                   # Extension icons
 └── README.md
 ```
@@ -355,6 +429,14 @@ civitai-reaction-stats/
 2. Go to `chrome://extensions/`
 3. Click the refresh icon on the extension card
 4. Reload Civitai to test changes
+
+Before committing collector or dashboard changes:
+
+```bash
+cd scripts
+npm ci
+npm test
+```
 
 ### Testing the Fetch Script Locally
 
@@ -388,16 +470,35 @@ GIST_ID=xxx GIST_TOKEN=xxx CIVITAI_USERNAME=xxx CIVITAI_API_KEY=xxx REFRESH_TIER
 - "Stats changed: X" and "Unchanged: Y"
 - Check your Gist to verify data was written correctly
 
+### Safe validation against the live dataset
+
+Manual workflow runs default to **dry-run enabled**. A dry run reads the existing
+Gist, performs discovery/refresh/merge, validates that every historical
+snapshot plus every image and post-title cache entry was preserved, uploads before/after JSON as a
+short-lived Actions artifact, and **does not update the Gist**. Disable dry-run
+only when you deliberately want the manual run to write.
+
+The Gist itself is a Git repository and retains revisions. See
+[ROLLBACK.md](./ROLLBACK.md) for data-backup and recovery procedures.
+
+The API authentication details and tRPC wire formats are documented in
+[CIVITAI_OAUTH_INTEGRATION_GUIDE.md](./CIVITAI_OAUTH_INTEGRATION_GUIDE.md).
+
 ## Privacy
 
-- This extension only reads data from your public Gist
-- No data is sent to any third-party servers
-- Your Civitai stats are fetched by GitHub Actions, not by the extension
-- The extension does not require any Civitai credentials
+- The current Gist-based mode stores data in a **public GitHub Gist**. It can
+  expose the configured username, image ids and URLs, timestamps, reaction
+  history, base models, cached post titles, and prompt-derived names when Civitai
+  supplies them.
+- The extension reads that Gist and opens Civitai links; it does not send the
+  dataset to an additional analytics service.
+- Civitai credentials stay in GitHub Actions secrets and are not available to
+  the extension.
+- Local custom names remain in `chrome.storage.local` on that browser.
 
 ## License
 
-MIT License - see LICENSE file for details.
+MIT License — see [LICENSE](./LICENSE).
 
 ## Contributing
 
