@@ -2,6 +2,7 @@ import SnapshotCodec from '../../extension/lib/snapshot-codec.js';
 import { applyRetentionPolicy } from './retention.js';
 
 const { FIELDS, resolveAt } = SnapshotCodec;
+export const CURRENT_FORMAT_VERSION = 1;
 
 function invariant(condition, message) {
   if (!condition) throw new Error(`Stats validation failed: ${message}`);
@@ -22,8 +23,12 @@ function validateResolvedSnapshot(snapshot, label) {
 
 export function inspectStatsData(data) {
   invariant(data && typeof data === 'object' && !Array.isArray(data), 'root must be an object');
+  invariant(data.formatVersion == null || data.formatVersion === CURRENT_FORMAT_VERSION,
+    `unsupported formatVersion ${String(data.formatVersion)}`);
   invariant(Array.isArray(data.totalSnapshots), 'totalSnapshots must be an array');
   invariant(Array.isArray(data.images), 'images must be an array');
+  invariant(data.creatorSnapshots == null || Array.isArray(data.creatorSnapshots),
+    'creatorSnapshots must be an array when present');
   invariant(data.postTitles == null ||
     (typeof data.postTitles === 'object' && !Array.isArray(data.postTitles)),
   'postTitles must be an object when present');
@@ -51,10 +56,32 @@ export function inspectStatsData(data) {
     );
   }
 
+  const creatorTimestamps = new Set();
+  let previousCreatorTime = -Infinity;
+  for (const [index, snapshot] of (data.creatorSnapshots || []).entries()) {
+    invariant(snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot),
+      `creator snapshot ${index} must be an object`);
+    invariant(validTimestamp(snapshot.timestamp), `creator snapshot ${index} has an invalid timestamp`);
+    invariant(!creatorTimestamps.has(snapshot.timestamp),
+      `creatorSnapshots has duplicate timestamp ${snapshot.timestamp}`);
+    creatorTimestamps.add(snapshot.timestamp);
+    const creatorTime = Date.parse(snapshot.timestamp);
+    invariant(creatorTime > previousCreatorTime,
+      `creatorSnapshots is not chronological at ${snapshot.timestamp}`);
+    previousCreatorTime = creatorTime;
+    invariant(Number.isFinite(snapshot.followers),
+      `creator snapshot ${index}.followers is not finite`);
+    invariant(snapshot.followers >= 0, `creator snapshot ${index}.followers is negative`);
+    invariant(Number.isInteger(snapshot.followers),
+      `creator snapshot ${index}.followers is not an integer`);
+  }
+
   return {
+    formatVersion: data.formatVersion ?? CURRENT_FORMAT_VERSION,
     images: data.images.length,
     imageSnapshots,
     totalSnapshots: data.totalSnapshots.length,
+    creatorSnapshots: (data.creatorSnapshots || []).length,
     postTitles: Object.keys(data.postTitles || {}).length
   };
 }
@@ -96,6 +123,11 @@ export function assertSafeTransition(before, after, options = {}) {
     'total history',
     { retentionReferenceTime, candidateTimestamp }
   );
+  assertCreatorHistoryPreserved(
+    before.creatorSnapshots || [],
+    after.creatorSnapshots || [],
+    { retentionReferenceTime, candidateTimestamp }
+  );
   const afterPostTitles = after.postTitles || {};
   for (const postId of Object.keys(before.postTitles || {})) {
     invariant(postId in afterPostTitles, `candidate dropped post-title cache entry ${postId}`);
@@ -104,6 +136,36 @@ export function assertSafeTransition(before, after, options = {}) {
     `candidate dropped post-title cache entries (${beforeSummary.postTitles} -> ${afterSummary.postTitles})`);
 
   return { before: beforeSummary, after: afterSummary };
+}
+
+function assertCreatorHistoryPreserved(beforeSnapshots, afterSnapshots, options) {
+  const requiredBefore = options.retentionReferenceTime == null
+    ? beforeSnapshots
+    : applyRetentionPolicy(beforeSnapshots, options.retentionReferenceTime);
+  const beforeByTimestamp = uniqueSnapshotsByTimestamp(beforeSnapshots, 'creator history before');
+  const afterByTimestamp = uniqueSnapshotsByTimestamp(afterSnapshots, 'creator history candidate');
+
+  invariant(afterSnapshots.length >= requiredBefore.length,
+    `creator history lost snapshots beyond retention ` +
+    `(${requiredBefore.length} required, ${afterSnapshots.length} candidate)`);
+
+  for (const snapshot of requiredBefore) {
+    const candidate = afterByTimestamp.get(snapshot.timestamp);
+    invariant(candidate, `creator history dropped required snapshot ${snapshot.timestamp}`);
+    invariant(candidate.followers === snapshot.followers,
+      `creator history changed followers at ${snapshot.timestamp}`);
+  }
+
+  for (const candidate of afterSnapshots) {
+    const previous = beforeByTimestamp.get(candidate.timestamp);
+    if (previous) {
+      invariant(candidate.followers === previous.followers,
+        `creator history changed followers at ${candidate.timestamp}`);
+    } else if (options.candidateTimestamp != null) {
+      invariant(candidate.timestamp === options.candidateTimestamp,
+        `creator history introduced unexpected snapshot ${candidate.timestamp}`);
+    }
+  }
 }
 
 function assertSnapshotHistoryPreserved(beforeSnapshots, afterSnapshots, label, options) {

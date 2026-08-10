@@ -29,6 +29,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         .catch(error => sendResponse({ success: false, error: error.message }));
       return true;
 
+    case 'updateCivitaiPostTitle':
+      updateCivitaiPostTitle(message)
+        .then(result => sendResponse({ success: true, ...result }))
+        .catch(error => sendResponse({ success: false, error: error.message }));
+      return true;
+
     default:
       sendResponse({ success: false, error: 'Unknown action' });
   }
@@ -93,6 +99,122 @@ async function saveSettings(settings) {
       }
     });
   });
+}
+
+/**
+ * Change one public Civitai post title through an already signed-in Civitai
+ * tab. The extension never receives or stores session cookies. The page makes
+ * the same-origin request, first checks the authoritative current title, then
+ * re-reads it after the mutation so a successful response cannot be mistaken
+ * for a successful update.
+ */
+async function updateCivitaiPostTitle(message) {
+  const postId = Number(message.postId);
+  const host = message.host === 'red' ? 'civitai.red' : 'civitai.com';
+  const title = message.title == null || message.title === '' ? null : String(message.title).trim();
+  const expectedPreviousTitle = message.expectedPreviousTitle == null
+    ? null
+    : String(message.expectedPreviousTitle);
+
+  if (!Number.isSafeInteger(postId) || postId <= 0) throw new Error('Invalid Civitai post id.');
+  if (title != null && title.length > 200) throw new Error('The post title is too long.');
+
+  const tabs = await chrome.tabs.query({ url: [`https://${host}/*`] });
+  const tab = tabs.find(item => item.active) || tabs[0];
+  if (!tab?.id) {
+    throw new Error(`Open ${host} in a signed-in tab, then try again.`);
+  }
+
+  const results = await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    world: 'MAIN',
+    args: [postId, title, expectedPreviousTitle],
+    func: async (targetPostId, nextTitle, expectedTitle) => {
+      function decodeReferenceTable(table) {
+        if (!Array.isArray(table) || !table.length) return table;
+        const decoded = new Map();
+        function decode(index) {
+          if (!Number.isInteger(index)) return index;
+          if (index < 0) return null;
+          if (index >= table.length) throw new Error('Civitai returned an invalid reference table.');
+          if (decoded.has(index)) return decoded.get(index);
+          const value = table[index];
+          if (Array.isArray(value)) {
+            const result = [];
+            decoded.set(index, result);
+            for (const item of value) result.push(Number.isInteger(item) ? decode(item) : item);
+            return result;
+          }
+          if (value && typeof value === 'object') {
+            const result = {};
+            decoded.set(index, result);
+            for (const [key, item] of Object.entries(value)) {
+              result[key] = Number.isInteger(item) ? decode(item) : item;
+            }
+            return result;
+          }
+          decoded.set(index, value);
+          return value;
+        }
+        return decode(0);
+      }
+
+      function payload(body) {
+        if (Array.isArray(body) && body.length === 1) return payload(body[0]);
+        if (body?.error) throw new Error(body.error?.json?.message || body.error?.message || 'Civitai rejected the request.');
+        const data = body?.result?.data;
+        if (typeof data === 'string') {
+          const parsed = JSON.parse(data);
+          return Array.isArray(parsed) ? decodeReferenceTable(parsed) : parsed;
+        }
+        return data && typeof data === 'object' && 'json' in data ? data.json : data;
+      }
+
+      async function trpcGet() {
+        const input = encodeURIComponent(JSON.stringify({ json: { id: targetPostId } }));
+        const response = await fetch(`/api/trpc/post.get?input=${input}&_t=${Date.now()}`, {
+          credentials: 'include',
+          cache: 'no-store',
+          headers: { Accept: 'application/json' }
+        });
+        const body = await response.json().catch(() => null);
+        if (!response.ok) {
+          throw new Error(body?.error?.json?.message || `Civitai post read failed (HTTP ${response.status}).`);
+        }
+        return payload(body);
+      }
+
+      const before = await trpcGet();
+      const currentTitle = before?.title || null;
+      if (currentTitle !== expectedTitle) {
+        return { conflict: true, currentTitle, previousTitle: currentTitle, title: currentTitle };
+      }
+
+      const response = await fetch('/api/trpc/post.update', {
+        method: 'POST',
+        credentials: 'include',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ json: { id: targetPostId, title: nextTitle } })
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(body?.error?.json?.message || `Civitai title update failed (HTTP ${response.status}).`);
+      }
+      payload(body);
+
+      const after = await trpcGet();
+      const verifiedTitle = after?.title || null;
+      if (verifiedTitle !== nextTitle) {
+        throw new Error('Civitai responded, but the title could not be verified after the update.');
+      }
+      return { conflict: false, previousTitle: currentTitle, title: verifiedTitle };
+    }
+  });
+
+  const result = results?.[0]?.result;
+  if (!result) throw new Error('The signed-in Civitai tab did not return an update result.');
+  return result;
 }
 
 // Log when service worker starts

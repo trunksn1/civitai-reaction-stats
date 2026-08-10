@@ -42,12 +42,13 @@ extension/
   content/                   Stats-menu injection on .com and .red
   lib/
     chart.min.js             vendored Chart.js
+    insights-analytics.js    pure daily/post/cohort/record calculations
     safe-values.js           tested HTML/URL rendering guards
     snapshot-codec.js        shared absolute/delta codec
   popup/                     Gist URL settings
   stats-page/                dashboard
   manifest.json              MV3 manifest
-  service-worker.js          settings, cross-origin Gist fetch, tab opening
+  service-worker.js          settings, Gist fetch, tabs, verified title relay
 scripts/
   fetch-stats.js             collector CLI
   lib/trpc.js                dual-format tRPC decoding and headers
@@ -238,9 +239,11 @@ The logical top-level shape is:
 
 ```text
 StatsData
+  formatVersion: 1
   username: string
   lastUpdated: ISO timestamp | null
   totalSnapshots: Snapshot[]
+  creatorSnapshots: { timestamp: ISO timestamp, followers: integer }[]
   images: ImageData[]
   postTitles: { [postId]: { title: string|null, fetchedAt: ISO timestamp } }
 
@@ -255,9 +258,12 @@ ImageData
 Tracked snapshot fields are likes, hearts, laughs, cries, comments, buzz,
 collects, and views. Aggregate snapshots also carry `imageCount`.
 
-No positional-array `formatVersion` exists yet. Because the Gist already
-crosses GitHub's inline API truncation threshold, a versioned storage-v2 format
-or split store remains planned work.
+Object-format files now carry `formatVersion: 1`; files written before the field
+existed are interpreted as legacy version 1, and unknown versions are rejected.
+The planned positional-array or split-store migration would therefore become
+version 2 and remains separate work. Creator snapshots use absolute follower
+totals and the same retention policy as the other histories. They intentionally
+allow decreases, because those represent real net unfollows.
 
 ## Extension architecture
 
@@ -265,7 +271,9 @@ or split store remains planned work.
 
 The popup validates and stores a Gist URL in `chrome.storage.sync`. The service
 worker cache-busts and fetches that URL, returns parsed JSON to the stats page,
-and opens the dashboard tab.
+and opens the dashboard tab. For an explicitly requested public-title change it
+also injects a narrow same-origin operation into an already open Civitai tab;
+session cookies never cross into extension storage or messages.
 
 The popup currently accepts raw Gist hosts only as configuration; normalization
 of ordinary Gist page URLs is separate UX work.
@@ -285,6 +293,10 @@ The dashboard uses the shared codec and includes:
 - true time spacing on numeric epoch axes;
 - stepped cumulative lines, stacked fixed-bucket delta bars, and stacked areas;
 - per-image cards, sparklines, detailed charts, sorting, and a top-image timeline.
+- follower total/net-change reporting plus Creator Insights: daily publish-impact
+  overlay, switchable 12-month calendar, records/milestones, post aggregation,
+  new-vs-back-catalog gains, and coverage-gated publish-age cohorts;
+- thumbnail legend items and external thumbnail tooltips on the image timeline.
 
 External Gist/post-title values are escaped with `safe-values.js`. Links and
 thumbnail sources are limited to HTTPS Civitai/Civitai CDN hostnames before
@@ -300,8 +312,12 @@ Display names resolve in this order:
 4. `baseModel · date`;
 5. collector prompt/name or `Image {id}`.
 
-Local overrides live in `chrome.storage.local`. The extension does not yet
-write titles back to Civitai.
+Local overrides live in `chrome.storage.local`. The rename dialog independently
+controls local image/post scope and optional public post-title write-back. The
+write path performs an authoritative pre-read, detects conflicts, submits only
+`{ id, title }`, re-reads to verify, updates the in-memory title cache, and keeps
+one local undo record. It fails without changing the public post when no suitable
+signed-in tab exists or the upstream call cannot be verified.
 
 ## Testing
 
@@ -314,8 +330,9 @@ npm run validate:stats -- /path/to/stats.json
 ```
 
 Tests cover the snapshot codec, legacy/reference-table tRPC decoding, safe HTML
-and URL handling, dataset transition guards, UTC tier selection, retention,
-and post-title extraction. `.github/workflows/ci.yml` runs these tests, syntax
+and URL handling, insight calculations, versioned creator-history transition
+guards, UTC tier selection, retention, and post-title extraction.
+`.github/workflows/ci.yml` runs these tests, syntax
 checks, and a synthetic posting-time analysis without secrets or Gist writes.
 
 The collector workflow also runs the tests before collection. A manual dry run

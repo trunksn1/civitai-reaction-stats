@@ -96,12 +96,12 @@ Ordered by delight-per-effort; each is an independent widget on the Overview tab
 
 | # | Feature | Data source | Size |
 |---|---------|-------------|------|
-| 6.1 | Calendar heatmap (GitHub-style, reactions gained/day, 12 months) | existing total snapshots | M |
+| 6.1 | ✅ Calendar heatmap (GitHub-style; switchable reactions, net followers, images, or posts; 12 months) | existing total and creator snapshots | M |
 | 6.2 | Split timing views: (a) audience-activity DoW × hour heatmap from reaction inflow; (b) true personal “best time to post” using publish time versus age-normalized image outcome/velocity with sample-size warnings. The former must not be labeled as evidence for the latter. | existing snapshots + `createdAt` | M |
-| 6.3 | Records & milestones — best day, gaining streak, next round-number milestone with linear-projection ETA | existing | M |
+| 6.3 | 🟡 Records & milestones — best day/week, gaining streak, next round-number milestone, top post, oldest image still gaining are done; projection ETA remains intentionally deferred until enough stable daily data exists | existing | M |
 | 6.4 | ✅ Distribution histogram + "top N images = X% of reactions" | existing | S |
 | 6.5 | Week-vs-last-week sparklines on summary cards | existing | S |
-| 6.6 | Image velocity / half-life + "hidden gems" (old images still accelerating) | existing | M |
+| 6.6 | 🟡 Oldest-image-still-gaining and new-work-vs-back-catalog are done; full velocity/half-life scoring remains | existing | M |
 | 6.7 | ✅ Reaction personality (funniest / most loved / most tipped) | existing | S |
 | 6.8 | ✅ "On this day" (posted a year ago + earned since) | existing | S |
 | 6.9 | Monthly recap card exported as PNG (canvas-rendered, Wrapped-style) | existing | L |
@@ -250,11 +250,11 @@ so the part number is never what gets truncated away.
 Removed 2026-07-29: 7.1 proved there is no filename to capture. Intentionally left as a
 numbered stub so 7.6/7.7 references in older notes still line up.
 
-### 7.6 🟡 Rename UI: local name vs. post title **[M]**
+### 7.6 ✅ Rename UI: local name vs. post title **[M]**
 
-**Current state:** local per-image/per-post naming and derived `pt. N` storage are done.
-The “also set the post title on Civitai” control remains dependent on 7.7 and must not
-be treated as shipped yet.
+**Implemented 2026-08-10:** the dialog now separates local image/post scope from the
+independent public-title checkbox. Derived `pt. N` names remain local; Civitai receives
+only the plain title.
 
 Extend the existing inline editor (`startRename`, `stats.js:1446`). Two independent things
 happen on save, and the dialog must keep them visually separate:
@@ -281,7 +281,14 @@ Flow:
   the "spread across post" flag), not as N literal strings. Otherwise adding an image to
   the post later leaves the numbering stale and unfixable.
 
-### 7.7 Write-back to Civitai **[L]** — riskiest item, ship last
+### 7.7 🟡 Write-back to Civitai **[L]** — implementation complete; live owner probe required
+
+The same-origin signed-in-tab relay, narrow `{ id, title }` mutation, pre-write
+conflict check, post-write re-read, cached-title update, harmless failure path, and
+one-step local undo are implemented. Do not mark this fully shipped until an owner
+tests a disposable title in Civitai and verifies that the upstream tRPC wire behavior
+still accepts the non-batched mutation used here. No automated test should mutate a
+real public post.
 
 Mutating the user's live account. Requirements:
 

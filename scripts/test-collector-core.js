@@ -1,11 +1,39 @@
 import assert from 'node:assert/strict';
 import {
+  appendCreatorSnapshot,
   applyRetentionPolicy,
   determineRefreshTier,
+  extractCreatorFollowers,
   extractPostTitleFromHtml,
   processImages,
   retryAfterDelayMs
 } from './fetch-stats.js';
+
+assert.equal(
+  extractCreatorFollowers({ stats: { followerCountAllTime: 123 } }),
+  123
+);
+assert.equal(
+  extractCreatorFollowers({ stats: { followerCountAllTime: 0 } }),
+  0,
+  'a real zero is different from a missing response value'
+);
+assert.throws(() => extractCreatorFollowers({ stats: {} }), /unexpected user.getCreator/);
+assert.throws(
+  () => extractCreatorFollowers({ stats: { followerCountAllTime: -1 } }),
+  /unexpected user.getCreator/
+);
+
+const creatorSnapshotResult = appendCreatorSnapshot(
+  [{ timestamp: '2026-08-09T00:00:00.000Z', followers: 50 }],
+  '2026-08-10T00:00:00.000Z',
+  48,
+  Date.parse('2026-08-10T00:00:00.000Z')
+);
+assert.deepEqual(creatorSnapshotResult.snapshots, [
+  { timestamp: '2026-08-09T00:00:00.000Z', followers: 50 },
+  { timestamp: '2026-08-10T00:00:00.000Z', followers: 48 }
+]);
 
 assert.equal(determineRefreshTier(new Date('2026-07-01T00:00:00Z')), 'quarterly');
 assert.equal(determineRefreshTier(new Date('2026-07-01T01:00:00Z')), 'daily');

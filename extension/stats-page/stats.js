@@ -7,6 +7,8 @@
 let statsData = null;
 let overviewChart = null;
 let overviewActivityChart = null;
+let creatorGrowthChart = null;
+let catalogChart = null;
 let currentTab = 'overview';
 let currentTimeRange = '1d';
 let currentChartType = 'auto'; // 'auto', 'line', 'bar'
@@ -33,6 +35,7 @@ let customImageNames = {};
 // Names the user applied to a whole post; each image shows it with a "pt. N"
 // suffix. Keyed by post id — see loadCustomImageNames().
 let customPostNames = {};
+let lastCivitaiTitleWrite = null;
 // postId -> images of that post, id-ascending. Rebuilt on each data load.
 let postIndex = new Map();
 let displayedImages = 10;
@@ -216,6 +219,7 @@ const retryBtn = document.getElementById('retryBtn');
 async function init() {
   await loadCustomColors();
   await loadCustomImageNames();
+  await loadLastCivitaiTitleWrite();
   await loadChartTypePreference();
   setupEventListeners();
   setupColorSettings();
@@ -316,6 +320,27 @@ function setupEventListeners() {
     displayedImages += IMAGES_PER_PAGE;
     renderImages(document.getElementById('sortSelect').value);
   });
+
+  document.getElementById('calendarMetric')?.addEventListener('change', renderActivityCalendar);
+  document.getElementById('undoTitleBtn')?.addEventListener('click', undoLastCivitaiTitle);
+}
+
+function validateStatsFormat(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new Error('The stats file is not a valid object.');
+  }
+  if (data.formatVersion != null && data.formatVersion !== 1) {
+    throw new Error(
+      `This extension supports stats format 1, but the Gist uses format ${data.formatVersion}. ` +
+      'Update the extension before opening this data.'
+    );
+  }
+  if (!Array.isArray(data.totalSnapshots) || !Array.isArray(data.images)) {
+    throw new Error('The stats file is missing totalSnapshots or images.');
+  }
+  if (data.creatorSnapshots != null && !Array.isArray(data.creatorSnapshots)) {
+    throw new Error('The stats file has an invalid creatorSnapshots value.');
+  }
 }
 
 /**
@@ -331,7 +356,9 @@ async function loadData() {
       throw new Error(response.error);
     }
 
+    validateStatsFormat(response.data);
     statsData = response.data;
+    statsData.creatorSnapshots = statsData.creatorSnapshots || [];
     rebuildPostIndex();
     showContent();
     renderStats();
@@ -395,6 +422,8 @@ function renderStats() {
   renderHallOfFame();
   renderOnThisDay();
 
+  if (currentTab === 'insights') renderInsights();
+
   // Render images
   renderImages(document.getElementById('sortSelect').value);
 
@@ -429,6 +458,8 @@ function switchTab(tab) {
     renderPeriodSummary();
   } else if (tab === 'images' && statsData) {
     renderImagesTimeline();
+  } else if (tab === 'insights' && statsData) {
+    renderInsights();
   } else if (tab === 'overview' && overviewActivityChart) {
     overviewActivityChart.resize();
   }
@@ -453,6 +484,11 @@ function renderSummaryCards() {
   document.getElementById('totalComments').textContent = (latest.comments || 0).toLocaleString();
   document.getElementById('totalBuzz').textContent = (latest.buzz || 0).toLocaleString();
   document.getElementById('totalCollects').textContent = (latest.collects || 0).toLocaleString();
+  const creators = InsightsAnalytics.sortedCreatorSnapshots(statsData.creatorSnapshots);
+  const followers = creators[creators.length - 1]?.followers;
+  document.getElementById('totalFollowers').textContent = followers == null
+    ? 'Not collected yet'
+    : followers.toLocaleString();
 }
 
 /**
@@ -483,6 +519,27 @@ function renderKpiDeltas() {
       `<span class="${d1 > 0 ? 'delta-up' : 'delta-muted'}">${fmt(d1)} today</span>` +
       `<span class="delta-sep">·</span>` +
       `<span class="${d7 > 0 ? 'delta-up' : 'delta-muted'}">${fmt(d7)} 7d</span>`;
+  }
+
+  const followerContent = document.querySelector('.summary-card[data-type="followers"] .card-content');
+  if (followerContent) {
+    let deltaEl = followerContent.querySelector('.card-delta');
+    if (!deltaEl) {
+      deltaEl = document.createElement('span');
+      deltaEl.className = 'card-delta';
+      followerContent.appendChild(deltaEl);
+    }
+    if ((statsData.creatorSnapshots || []).length < 2) {
+      deltaEl.textContent = 'baseline starts on next successful run';
+    } else {
+      const daily = InsightsAnalytics.buildDailySeries(statsData, 8);
+      const d1 = sumDaily(daily, 'netFollowers', 1);
+      const d7 = sumDaily(daily, 'netFollowers', 7);
+      deltaEl.innerHTML =
+        `<span class="${d1 > 0 ? 'delta-up' : 'delta-muted'}">${escapeHtml(formatSigned(d1))} net today</span>` +
+        '<span class="delta-sep">·</span>' +
+        `<span class="${d7 > 0 ? 'delta-up' : 'delta-muted'}">${escapeHtml(formatSigned(d7))} net 7d</span>`;
+    }
   }
 }
 
@@ -852,6 +909,239 @@ function renderOnThisDay() {
         <div class="mover-gain">${formatNumber(getTotalReactions(stats))}</div>
       </a>`;
   }).join('');
+}
+
+function sumDaily(rows, field, days) {
+  return rows.slice(-days).reduce((sum, row) => sum + (row[field] || 0), 0);
+}
+
+function formatSigned(value) {
+  if (value == null) return '—';
+  return `${value > 0 ? '+' : ''}${Number(value).toLocaleString()}`;
+}
+
+function renderInsights() {
+  const daily = InsightsAnalytics.buildDailySeries(statsData, 365);
+  const hasFollowerDeltas = (statsData.creatorSnapshots || []).length > 1;
+
+  document.getElementById('followers7d').textContent = hasFollowerDeltas
+    ? formatSigned(sumDaily(daily, 'netFollowers', 7)) : 'Collecting baseline';
+  document.getElementById('followers30d').textContent = hasFollowerDeltas
+    ? formatSigned(sumDaily(daily, 'netFollowers', 30)) : 'Collecting baseline';
+  document.getElementById('reactions30d').textContent =
+    formatSigned(sumDaily(daily, 'reactions', 30));
+  document.getElementById('posts30d').textContent =
+    sumDaily(daily, 'publishedPosts', 30).toLocaleString();
+
+  renderCreatorGrowth(daily);
+  renderActivityCalendar();
+  renderRecords(daily);
+  renderPostPerformance();
+  renderCatalogChart(daily);
+  renderCohorts();
+}
+
+function renderCreatorGrowth(daily) {
+  const canvas = document.getElementById('creatorGrowthChart');
+  if (!canvas) return;
+  if (creatorGrowthChart) creatorGrowthChart.destroy();
+
+  const rows = daily.slice(-90);
+  creatorGrowthChart = new Chart(canvas.getContext('2d'), {
+    data: {
+      labels: rows.map(row => row.day.slice(5)),
+      datasets: [
+        {
+          type: 'bar',
+          label: 'Reactions gained',
+          data: rows.map(row => row.reactions),
+          backgroundColor: '#be4bdb99',
+          borderColor: '#be4bdb',
+          borderWidth: 1,
+          yAxisID: 'y'
+        },
+        {
+          type: 'line',
+          label: 'Net followers',
+          data: rows.map(row => row.netFollowers),
+          borderColor: '#b197fc',
+          backgroundColor: '#b197fc',
+          pointRadius: 2,
+          tension: 0.2,
+          yAxisID: 'y1'
+        },
+        {
+          type: 'line',
+          label: 'Posts published',
+          data: rows.map(row => row.publishedPosts),
+          borderColor: '#69db7c',
+          backgroundColor: '#69db7c',
+          showLine: false,
+          pointRadius: rows.map(row => row.publishedPosts ? 5 : 0),
+          pointStyle: 'triangle',
+          yAxisID: 'y1'
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: '#c1c2c5', boxWidth: 10 } },
+        tooltip: {
+          callbacks: {
+            label: context => `${context.dataset.label}: ${formatSigned(context.parsed.y)}`
+          }
+        }
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: '#909296', maxTicksLimit: 12 } },
+        y: {
+          beginAtZero: true,
+          grid: { color: 'rgba(55,58,64,.5)' },
+          ticks: { color: '#909296', callback: formatNumber }
+        },
+        y1: {
+          position: 'right',
+          grid: { drawOnChartArea: false },
+          ticks: { color: '#b197fc', precision: 0 }
+        }
+      }
+    }
+  });
+}
+
+function renderActivityCalendar() {
+  const container = document.getElementById('activityCalendar');
+  const selector = document.getElementById('calendarMetric');
+  if (!container || !statsData) return;
+
+  const metric = selector?.value || 'reactions';
+  const labels = {
+    reactions: 'reactions gained',
+    netFollowers: 'net followers',
+    publishedImages: 'images published',
+    publishedPosts: 'posts published'
+  };
+  const rows = InsightsAnalytics.buildDailySeries(statsData, 365);
+  const positive = rows.map(row => Math.abs(row[metric] || 0)).filter(Boolean).sort((a, b) => a - b);
+  const thresholds = [0.25, 0.5, 0.75].map(q => positive[Math.floor((positive.length - 1) * q)] || 0);
+  const startOffset = new Date(rows[0].timestamp).getUTCDay();
+  const cells = Array.from({ length: startOffset }, () => '<i class="calendar-cell" aria-hidden="true"></i>');
+
+  for (const row of rows) {
+    const value = row[metric] || 0;
+    const magnitude = Math.abs(value);
+    const level = magnitude === 0 ? 0
+      : magnitude <= thresholds[0] ? 1
+      : magnitude <= thresholds[1] ? 2
+      : magnitude <= thresholds[2] ? 3 : 4;
+    cells.push(
+      `<i class="calendar-cell" data-level="${level}" data-negative="${value < 0}" ` +
+      `title="${escapeHtml(row.day)}: ${escapeHtml(formatSigned(value))} ${escapeHtml(labels[metric])}"></i>`
+    );
+  }
+  container.innerHTML = cells.join('');
+}
+
+function renderRecords(daily) {
+  const container = document.getElementById('recordsGrid');
+  if (!container) return;
+  const record = InsightsAnalytics.buildRecords(statsData, daily);
+  const hasFollowerDeltas = (statsData.creatorSnapshots || []).length > 1;
+  const cards = [];
+  const add = (label, value, detail = '') => cards.push(
+    `<div class="record-item"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong>` +
+    `<span>${escapeHtml(detail)}</span></div>`
+  );
+
+  add('Best reaction day', formatSigned(record.bestReactionDay?.value), record.bestReactionDay?.day || '');
+  add('Best 7-day run', formatSigned(record.bestReactionWeek?.value), `ending ${record.bestReactionWeek?.day || '—'}`);
+  if (hasFollowerDeltas) {
+    add('Best net-follower day', formatSigned(record.bestFollowerDay?.value), record.bestFollowerDay?.day || '');
+    add('Best net-follower week', formatSigned(record.bestFollowerWeek?.value), `ending ${record.bestFollowerWeek?.day || '—'}`);
+  }
+  add('Reaction-growth streak', `${record.reactionStreak} days`, 'consecutive UTC days above zero');
+  if (record.topPost) add('Top post', record.topPost.title, `${formatNumber(record.topPost.reactions)} reactions`);
+  if (record.oldestStillGaining) {
+    add(
+      'Oldest image still gaining',
+      displayName(record.oldestStillGaining.image),
+      `${formatSigned(record.oldestStillGaining.gained7d)} in 7 days`
+    );
+  }
+  if (record.reactionMilestone.target) {
+    add(
+      'Next reaction milestone',
+      formatNumber(record.reactionMilestone.target),
+      `${formatNumber(record.reactionMilestone.target - record.reactionMilestone.current)} to go`
+    );
+  }
+  if (record.followerMilestone?.target) {
+    add(
+      'Next follower milestone',
+      formatNumber(record.followerMilestone.target),
+      `${formatNumber(record.followerMilestone.target - record.followerMilestone.current)} to go`
+    );
+  }
+  container.innerHTML = cards.join('');
+}
+
+function renderPostPerformance() {
+  const body = document.getElementById('postPerformanceBody');
+  if (!body) return;
+  const posts = InsightsAnalytics.aggregatePosts(statsData).slice(0, 12);
+  body.innerHTML = posts.map(post => {
+    const thumbUrl = safeCivitaiUrl(post.thumbnailUrl, '');
+    const image = thumbUrl ? `<img src="${escapeHtml(thumbUrl)}" alt="" loading="lazy">` : '';
+    const url = safeCivitaiUrl(post.url, '#');
+    return `<tr><td><div class="post-cell">${image}<a href="${escapeHtml(url)}" target="_blank" rel="noopener" title="${escapeHtml(post.title)}">${escapeHtml(post.title)}</a></div></td>` +
+      `<td>${post.imageCount.toLocaleString()}</td><td>${formatNumber(post.reactions)}</td>` +
+      `<td>${escapeHtml(formatSigned(post.gained7d))}</td></tr>`;
+  }).join('') || '<tr><td colspan="4">No post data yet</td></tr>';
+}
+
+function renderCatalogChart(daily) {
+  const canvas = document.getElementById('catalogChart');
+  if (!canvas) return;
+  if (catalogChart) catalogChart.destroy();
+  const rows = daily.slice(-90);
+  catalogChart = new Chart(canvas.getContext('2d'), {
+    type: 'bar',
+    data: {
+      labels: rows.map(row => row.day.slice(5)),
+      datasets: [
+        { label: 'New work', data: rows.map(row => row.newContentReactions), backgroundColor: '#be4bdb' },
+        { label: 'Back catalog', data: rows.map(row => row.backCatalogReactions), backgroundColor: '#228be6' }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { labels: { color: '#c1c2c5', boxWidth: 10 } } },
+      scales: {
+        x: { stacked: true, grid: { display: false }, ticks: { color: '#909296', maxTicksLimit: 8 } },
+        y: { stacked: true, beginAtZero: true, grid: { color: 'rgba(55,58,64,.5)' }, ticks: { color: '#909296', callback: formatNumber } }
+      }
+    }
+  });
+}
+
+function renderCohorts() {
+  const coverage = document.getElementById('cohortCoverage');
+  const body = document.getElementById('cohortBody');
+  if (!coverage || !body) return;
+  const result = InsightsAnalytics.buildPublishCohorts(statsData);
+  coverage.textContent = result.eligible
+    ? `${result.eligible} of ${result.total} images are covered. Older images first observed long after publication are excluded instead of estimating their early performance.`
+    : 'No age-normalized cohort is available yet. An image must first be observed within 36 hours of publication.';
+  const value = number => number == null ? '—' : formatNumber(Math.round(number));
+  body.innerHTML = result.cohorts.slice(0, 12).map(cohort =>
+    `<tr><td>${escapeHtml(cohort.month)}</td><td>${cohort.images}</td><td>${value(cohort.day1)}</td>` +
+    `<td>${value(cohort.day7)}</td><td>${value(cohort.day30)}</td><td>${value(cohort.day90)}</td></tr>`
+  ).join('') || '<tr><td colspan="6">No covered cohorts yet</td></tr>';
 }
 
 /**
@@ -1304,6 +1594,7 @@ function renderImagesTimeline() {
 
   const datasets = top.map((e, idx) => ({
     label: displayName(e.image).substring(0, 28),
+    _timelineImage: e.image,
     data: e.values,
     borderColor: TIMELINE_COLORS[idx],
     backgroundColor: TIMELINE_COLORS[idx] + 'D0',
@@ -1321,6 +1612,7 @@ function renderImagesTimeline() {
     }
     datasets.push({
       label: `Other (${rest.length} images)`,
+      _timelineImage: null,
       data: otherValues,
       borderColor: TIMELINE_OTHER_COLOR,
       backgroundColor: TIMELINE_OTHER_COLOR + 'B0',
@@ -1341,37 +1633,11 @@ function renderImagesTimeline() {
       interaction: { mode: 'index', intersect: false },
       plugins: {
         legend: {
-          display: true,
-          position: 'bottom',
-          labels: {
-            color: '#c1c2c5',
-            boxWidth: 10,
-            boxHeight: 10,
-            font: { size: 10 }
-          }
+          display: false
         },
         tooltip: {
-          backgroundColor: '#25262b',
-          titleColor: '#fff',
-          bodyColor: '#c1c2c5',
-          footerColor: '#fff',
-          borderColor: '#373a40',
-          borderWidth: 1,
-          padding: 10,
-          displayColors: true,
-          filter: item => item.parsed.y > 0,
-          itemSort: (a, b) => b.parsed.y - a.parsed.y,
-          callbacks: {
-            label: ctx => {
-              const prefix = bounded ? '+' : '';
-              return `${ctx.dataset.label}: ${prefix}${ctx.parsed.y.toLocaleString()}`;
-            },
-            footer: items => {
-              const total = items.reduce((sum, i) => sum + i.parsed.y, 0);
-              if (total <= 0) return '';
-              return `Total: ${bounded ? '+' : ''}${total.toLocaleString()}`;
-            }
-          }
+          enabled: false,
+          external: context => renderTimelineTooltip(context, bounded)
         }
       },
       scales: {
@@ -1389,6 +1655,107 @@ function renderImagesTimeline() {
       }
     }
   });
+  renderTimelineLegend(imagesTimelineChart);
+}
+
+function appendTimelineImage(container, image, className = '') {
+  if (!image?.thumbnailUrl) return false;
+  const url = safeCivitaiUrl(image.thumbnailUrl, '');
+  if (!url) return false;
+  const img = document.createElement('img');
+  img.src = url;
+  img.alt = '';
+  img.loading = 'lazy';
+  if (className) img.className = className;
+  container.appendChild(img);
+  return true;
+}
+
+function renderTimelineLegend(chart) {
+  const container = document.getElementById('timelineLegend');
+  if (!container) return;
+  container.replaceChildren();
+
+  chart.data.datasets.forEach((dataset, index) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'timeline-legend-item';
+    button.title = dataset.label;
+
+    const swatch = document.createElement('span');
+    swatch.className = 'legend-swatch';
+    swatch.style.backgroundColor = dataset.borderColor;
+    button.appendChild(swatch);
+    appendTimelineImage(button, dataset._timelineImage);
+
+    const label = document.createElement('span');
+    label.textContent = dataset.label;
+    button.appendChild(label);
+    button.addEventListener('click', () => {
+      chart.setDatasetVisibility(index, !chart.isDatasetVisible(index));
+      button.classList.toggle('is-hidden', !chart.isDatasetVisible(index));
+      chart.update();
+    });
+    container.appendChild(button);
+  });
+}
+
+function renderTimelineTooltip({ chart, tooltip }, bounded) {
+  const element = document.getElementById('timelineTooltip');
+  if (!element) return;
+  if (!tooltip || tooltip.opacity === 0) {
+    element.hidden = true;
+    return;
+  }
+
+  const points = [...(tooltip.dataPoints || [])]
+    .filter(point => point.parsed.y > 0)
+    .sort((a, b) => b.parsed.y - a.parsed.y);
+  if (!points.length) {
+    element.hidden = true;
+    return;
+  }
+
+  element.replaceChildren();
+  const title = document.createElement('div');
+  title.className = 'timeline-tooltip-title';
+  title.textContent = tooltip.title?.[0] || '';
+  element.appendChild(title);
+
+  let total = 0;
+  for (const point of points) {
+    total += point.parsed.y;
+    const row = document.createElement('div');
+    row.className = 'timeline-tooltip-row';
+    const swatch = document.createElement('span');
+    swatch.className = 'legend-swatch';
+    swatch.style.backgroundColor = point.dataset.borderColor;
+    row.appendChild(swatch);
+    if (!appendTimelineImage(row, point.dataset._timelineImage)) {
+      const blank = document.createElement('span');
+      blank.className = 'timeline-thumb-placeholder';
+      row.appendChild(blank);
+    }
+    const label = document.createElement('span');
+    label.textContent = point.dataset.label;
+    row.appendChild(label);
+    const value = document.createElement('strong');
+    value.textContent = `${bounded ? '+' : ''}${point.parsed.y.toLocaleString()}`;
+    row.appendChild(value);
+    element.appendChild(row);
+  }
+
+  const footer = document.createElement('div');
+  footer.className = 'timeline-tooltip-footer';
+  footer.textContent = `Total: ${bounded ? '+' : ''}${total.toLocaleString()}`;
+  element.appendChild(footer);
+  element.hidden = false;
+
+  const parent = chart.canvas.parentElement;
+  const left = Math.min(tooltip.caretX + 12, Math.max(0, parent.clientWidth - element.offsetWidth - 8));
+  const top = Math.max(8, tooltip.caretY - element.offsetHeight / 2);
+  element.style.left = `${left}px`;
+  element.style.top = `${top}px`;
 }
 
 /**
@@ -1408,6 +1775,7 @@ function renderImages(sortBy = 'newest') {
 
   // Update count
   document.getElementById('imageCount').textContent = `${images.length} images`;
+  updateUndoTitleButton();
 
   // Get images to display
   const toDisplay = images.slice(0, displayedImages);
@@ -1446,7 +1814,25 @@ async function loadCustomImageNames() {
 }
 
 function saveCustomImageNames() {
-  chrome.storage.local.set({ imageNames: customImageNames, postNames: customPostNames });
+  return chrome.storage.local.set({ imageNames: customImageNames, postNames: customPostNames });
+}
+
+async function loadLastCivitaiTitleWrite() {
+  try {
+    const result = await chrome.storage.local.get('lastCivitaiTitleWrite');
+    lastCivitaiTitleWrite = result.lastCivitaiTitleWrite || null;
+  } catch {
+    lastCivitaiTitleWrite = null;
+  }
+}
+
+function updateUndoTitleButton() {
+  const button = document.getElementById('undoTitleBtn');
+  if (!button) return;
+  button.hidden = !lastCivitaiTitleWrite;
+  if (lastCivitaiTitleWrite) {
+    button.title = `Restore “${lastCivitaiTitleWrite.previousTitle || '(no title)'}”`;
+  }
 }
 
 /**
@@ -1571,92 +1957,168 @@ function nameTooltip(image) {
  * all its images, so "pt. 1 / pt. 2" is a numbering this extension applies for
  * display and never something that could be stored upstream per image.
  */
-function applyRename(image, value, original) {
+function applyLocalRename(image, value, original, scope) {
   const postId = image.postId != null ? String(image.postId) : null;
-  const position = postPosition(image);
-  const hasPostName = postId !== null && !!customPostNames[postId];
-
-  // Empty, or the automatic name typed back in — treat as "remove my override".
-  if (!value || value === original) {
-    delete customImageNames[image.id];
-    const sharedWith = position ? `all ${position.total} images of this post` : 'this post';
-    if (hasPostName && confirm(`Also clear the name applied to ${sharedWith}?`)) {
-      delete customPostNames[postId];
-    }
-    return;
-  }
-
-  // Single-image post (or no post recorded): nothing to spread.
-  if (!position) {
-    customImageNames[image.id] = value;
-    return;
-  }
-
-  // Strip a "— pt. N" the user left in the field, so choosing "whole post"
-  // doesn't produce "Name — pt. 2 — pt. 2".
   const base = value.replace(/\s+[—-]\s*pt\.\s*\d+\s*$/i, '').trim() || value;
 
-  const applyToPost = confirm(
-    `This image is part of a post containing ${position.total} images.\n\n` +
-    `OK — name all ${position.total}: "${base} — pt. 1" … "${base} — pt. ${position.total}"\n` +
-    `Cancel — name only this image: "${value}"`
-  );
-
-  if (applyToPost) {
-    customPostNames[postId] = base;
-    // Drop this image's individual override, otherwise it would mask the
-    // post-wide name the user just asked for.
+  if (scope === 'post' && postId !== null) {
     delete customImageNames[image.id];
+    if (!value || value === original || base === postTitleOf(image)) delete customPostNames[postId];
+    else customPostNames[postId] = base;
   } else {
-    customImageNames[image.id] = value;
+    if (!value || value === original) delete customImageNames[image.id];
+    else customImageNames[image.id] = value;
   }
 }
 
-/**
- * Inline rename editor: swaps the card's name for an input; Enter/blur saves,
- * Escape cancels. Saving an empty value (or the automatic name) removes the
- * custom name and falls back to the naming cascade.
- */
-function startRename(imageId, btn) {
-  const card = btn.closest('.image-card');
-  const nameEl = card && card.querySelector('.image-name');
-  if (!nameEl || nameEl.querySelector('input')) return;
+function requestRename(image) {
+  const dialog = document.getElementById('renameDialog');
+  const form = document.getElementById('renameForm');
+  const input = document.getElementById('renameInput');
+  const postScope = document.getElementById('renamePostScope');
+  const publicOption = document.getElementById('renamePublicOption');
+  const publicCheckbox = document.getElementById('renamePublic');
+  const warning = document.getElementById('renameWarning');
+  const position = postPosition(image);
+  const hasPost = image.postId != null;
+
+  input.value = displayName(image);
+  input.placeholder = automaticName(image);
+  document.getElementById('renameDescription').textContent = position
+    ? `Post ${image.postId} contains ${position.total} images. Civitai has one public title shared by all of them.`
+    : hasPost ? `This image belongs to Civitai post ${image.postId}.` : 'No Civitai post id was collected for this image.';
+  postScope.hidden = !hasPost;
+  publicOption.hidden = !hasPost;
+  warning.hidden = !hasPost;
+  publicCheckbox.checked = hasPost;
+  form.elements.renameScope.value = hasPost ? 'post' : 'image';
+
+  return new Promise(resolve => {
+    form.onsubmit = event => {
+      event.preventDefault();
+      dialog.close('save');
+    };
+    document.getElementById('renameCancelBtn').onclick = () => dialog.close('cancel');
+    dialog.onclose = () => {
+      if (dialog.returnValue !== 'save') {
+        resolve(null);
+        return;
+      }
+      resolve({
+        value: input.value.trim(),
+        scope: form.elements.renameScope.value,
+        writePublic: hasPost && publicCheckbox.checked
+      });
+    };
+    dialog.showModal();
+    input.focus();
+    input.select();
+  });
+}
+
+function publicTitleFromName(value) {
+  if (!value) return null;
+  return value.replace(/\s+[—-]\s*pt\.\s*\d+\s*$/i, '').trim() || null;
+}
+
+async function writeCivitaiTitle(image, title, expectedPreviousTitle) {
+  let response = await chrome.runtime.sendMessage({
+    action: 'updateCivitaiPostTitle',
+    postId: image.postId,
+    host: image.host || 'com',
+    title,
+    expectedPreviousTitle
+  });
+  if (!response.success) throw new Error(response.error || 'Civitai title update failed.');
+
+  if (response.conflict) {
+    const current = response.currentTitle || '(no title)';
+    const overwrite = confirm(
+      `The public Civitai title changed since this data was collected.\n\n` +
+      `Current title: “${current}”\n\nOverwrite it with “${title || '(no title)'}”?`
+    );
+    if (!overwrite) throw new Error('Public title update canceled because the Civitai title changed.');
+    response = await chrome.runtime.sendMessage({
+      action: 'updateCivitaiPostTitle',
+      postId: image.postId,
+      host: image.host || 'com',
+      title,
+      expectedPreviousTitle: response.currentTitle
+    });
+    if (!response.success || response.conflict) {
+      throw new Error(response.error || 'The title changed again before it could be updated.');
+    }
+  }
+  return response;
+}
+
+async function startRename(imageId) {
 
   const image = statsData && statsData.images
     ? statsData.images.find(img => img.id === imageId)
     : null;
   if (!image) return;
 
+  const request = await requestRename(image);
+  if (!request) return;
   const original = automaticName(image);
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.className = 'image-name-input';
-  input.value = displayName(image);
-  input.maxLength = 80;
-  input.placeholder = original;
-
-  nameEl.innerHTML = '';
-  nameEl.appendChild(input);
-  input.focus();
-  input.select();
-
-  let done = false;
-  const finish = (save) => {
-    if (done) return;
-    done = true;
-    if (save) {
-      applyRename(image, input.value.trim(), original);
-      saveCustomImageNames();
+  let publicError = null;
+  if (request.writePublic) {
+    const nextTitle = publicTitleFromName(request.value);
+    const expectedTitle = postTitleOf(image);
+    if (nextTitle !== expectedTitle) {
+      try {
+        const result = await writeCivitaiTitle(image, nextTitle, expectedTitle);
+        statsData.postTitles = statsData.postTitles || {};
+        statsData.postTitles[String(image.postId)] = {
+          ...(statsData.postTitles[String(image.postId)] || {}),
+          title: result.title,
+          fetchedAt: new Date().toISOString()
+        };
+        lastCivitaiTitleWrite = {
+          postId: String(image.postId),
+          host: image.host || 'com',
+          previousTitle: result.previousTitle,
+          title: result.title,
+          timestamp: new Date().toISOString()
+        };
+        await chrome.storage.local.set({ lastCivitaiTitleWrite });
+      } catch (error) {
+        publicError = error;
+      }
     }
-    // Re-render everything that shows names (cards, timeline, overview lists)
-    renderStats();
-  };
+  }
 
-  input.addEventListener('keydown', ev => {
-    if (ev.key === 'Enter') finish(true);
-    else if (ev.key === 'Escape') finish(false);
-  });
-  input.addEventListener('blur', () => finish(true));
+  applyLocalRename(image, request.value, original, request.scope);
+  await saveCustomImageNames();
+  renderStats();
+  if (publicError) alert(`The local name was saved, but Civitai was not changed.\n\n${publicError.message}`);
+}
+
+async function undoLastCivitaiTitle() {
+  const undo = lastCivitaiTitleWrite;
+  if (!undo) return;
+  const image = (statsData.images || []).find(item => String(item.postId) === String(undo.postId));
+  if (!image) {
+    alert('The post for the last title change is not present in the loaded stats.');
+    return;
+  }
+  if (!confirm(`Restore the public Civitai title to “${undo.previousTitle || '(no title)'}”?`)) return;
+
+  try {
+    const result = await writeCivitaiTitle(image, undo.previousTitle, undo.title);
+    statsData.postTitles = statsData.postTitles || {};
+    statsData.postTitles[String(undo.postId)] = {
+      ...(statsData.postTitles[String(undo.postId)] || {}),
+      title: result.title,
+      fetchedAt: new Date().toISOString()
+    };
+    lastCivitaiTitleWrite = null;
+    await chrome.storage.local.remove('lastCivitaiTitleWrite');
+    renderStats();
+  } catch (error) {
+    alert(`The Civitai title was not undone.\n\n${error.message}`);
+  }
 }
 
 /**
@@ -1711,12 +2173,12 @@ function renderSparkline(image) {
  * Set up event listeners for image chart toggles and time selectors
  */
 function setupImageChartListeners(images) {
-  // Rename buttons (display-only custom names)
+  // Rename buttons open the explicit local/public scope dialog.
   document.querySelectorAll('.image-rename-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      startRename(btn.dataset.imageId, btn);
+      startRename(btn.dataset.imageId);
     });
   });
 
@@ -2273,7 +2735,7 @@ function createImageCard(image) {
             <a href="${escapeHtml(safeCivitaiUrl(image.url))}" target="_blank" rel="noopener" title="${escapeHtml(nameTooltip(image))}">
               ${escapeHtml(displayName(image))}
             </a>
-            <button class="image-rename-btn" data-image-id="${escapeHtml(image.id)}" title="Rename (display only — stored locally)">&#x270F;&#xFE0F;</button>
+            <button class="image-rename-btn" data-image-id="${escapeHtml(image.id)}" title="Rename locally or update the Civitai post title">&#x270F;&#xFE0F;</button>
           </div>
           <div class="image-date">${date}${badges}</div>
           <div class="image-stats">

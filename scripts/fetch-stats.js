@@ -9,7 +9,11 @@ import { pathToFileURL } from 'node:url';
 import SnapshotCodec from '../extension/lib/snapshot-codec.js';
 import { createTrpcHeaders, extractTrpcPayload } from './lib/trpc.js';
 import { aggregateSnapshots, applyRetentionPolicy } from './lib/retention.js';
-import { assertSafeTransition, inspectStatsData } from './lib/stats-validation.js';
+import {
+  assertSafeTransition,
+  CURRENT_FORMAT_VERSION,
+  inspectStatsData
+} from './lib/stats-validation.js';
 
 const {
   isDelta,
@@ -238,6 +242,45 @@ async function fetchImageStats(imageId, host = 'com') {
 
   console.log(`  Warning: Failed to fetch stats for image ${imageId}: ${failures.join('; ')}`);
   return null;
+}
+
+/**
+ * Extract the public follower total from user.getCreator without treating a
+ * missing/changed response shape as zero. A zero returned by Civitai is valid;
+ * an absent value is a collection failure and must leave history untouched.
+ */
+function extractCreatorFollowers(creator) {
+  const followers = creator?.stats?.followerCountAllTime;
+  if (!Number.isFinite(followers) || followers < 0 || !Number.isInteger(followers)) {
+    throw new Error('unexpected user.getCreator follower response shape');
+  }
+  return followers;
+}
+
+async function fetchCreatorFollowers(username) {
+  const input = { json: { username } };
+  const origin = siteOriginForHost('com');
+  const url = `${origin}/api/trpc/user.getCreator?input=${encodeURIComponent(JSON.stringify(input))}`;
+  const data = await fetchWithRetry(
+    url, MAX_RETRIES, INITIAL_BACKOFF_MS, createTrpcHeaders(origin, CIVITAI_API_KEY)
+  );
+  return extractCreatorFollowers(extractTrpcPayload(data));
+}
+
+function appendCreatorSnapshot(existingSnapshots, timestamp, followers, retentionReferenceTime) {
+  if (!validCreatorFollowerCount(followers)) {
+    throw new Error(`Invalid follower count: ${String(followers)}`);
+  }
+  const snapshots = [...(existingSnapshots || []), { timestamp, followers }];
+  const retained = applyRetentionPolicy(snapshots, retentionReferenceTime);
+  return {
+    snapshots: retained,
+    retentionRemoved: snapshots.length - retained.length
+  };
+}
+
+function validCreatorFollowerCount(value) {
+  return Number.isFinite(value) && value >= 0 && Number.isInteger(value);
 }
 
 /**
@@ -893,9 +936,11 @@ async function readGistData() {
  */
 function createEmptyStats() {
   return {
+    formatVersion: CURRENT_FORMAT_VERSION,
     username: CIVITAI_USERNAME,
     lastUpdated: null,
     totalSnapshots: [],
+    creatorSnapshots: [],
     images: [],
     postTitles: {}
   };
@@ -924,6 +969,7 @@ async function updateGist(data) {
     console.log('\nUpdating Gist...');
     console.log(`  Data size: ${(content.length / 1024).toFixed(2)} KB`);
     console.log(`  Total snapshots: ${data.totalSnapshots.length}`);
+    console.log(`  Creator snapshots: ${(data.creatorSnapshots || []).length}`);
     console.log(`  Images: ${data.images.length}`);
 
     if (DRY_RUN) {
@@ -1204,6 +1250,9 @@ async function main() {
     const existingData = await readGistData();
     const originalData = structuredClone(existingData);
     inspectStatsData(originalData);
+    // Legacy files did not have this field. Normalize only the candidate;
+    // originalData remains representative for the transition safety check.
+    existingData.creatorSnapshots = existingData.creatorSnapshots || [];
     await exportSafetyArtifact('stats-before', originalData);
 
     // Fetch all user images from Civitai
@@ -1314,6 +1363,30 @@ async function main() {
     if (totalRetentionRemoved > 0) {
       console.log(`\nRetention policy (total): removed ${totalRetentionRemoved} superseded observations`);
     }
+
+    // Creator follower totals are independent best-effort observations. Never
+    // invent zero on auth/API failures: keep every previous point and let the
+    // next scheduled run try again. Decreases are legitimate net unfollows and
+    // are deliberately preserved as absolute values.
+    try {
+      const followers = await fetchCreatorFollowers(CIVITAI_USERNAME);
+      const creatorResult = appendCreatorSnapshot(
+        existingData.creatorSnapshots,
+        totalSnapshot.timestamp,
+        followers,
+        retentionReferenceTime
+      );
+      existingData.creatorSnapshots = creatorResult.snapshots;
+      console.log(`\nCreator snapshot: ${followers} followers`);
+      if (creatorResult.retentionRemoved > 0) {
+        console.log(
+          `Retention policy (creator): removed ${creatorResult.retentionRemoved} superseded observations`
+        );
+      }
+    } catch (error) {
+      console.log(`\nFollower collection failed (history preserved): ${error.message}`);
+    }
+
     // Resolve post titles (best-effort — names are cosmetic, never worth
     // failing a stats run over).
     try {
@@ -1326,6 +1399,7 @@ async function main() {
 
     // Update images with merged snapshots
     existingData.images = images;
+    existingData.formatVersion = CURRENT_FORMAT_VERSION;
     existingData.username = CIVITAI_USERNAME;
     existingData.lastUpdated = totalSnapshot.timestamp;
 
@@ -1367,6 +1441,9 @@ async function main() {
     });
     console.log('Candidate transition check:');
     console.log(`  Images: ${transition.before.images} -> ${transition.after.images}`);
+    console.log(
+      `  Creator snapshots: ${transition.before.creatorSnapshots} -> ${transition.after.creatorSnapshots}`
+    );
     console.log(`  Post titles: ${transition.before.postTitles} -> ${transition.after.postTitles}`);
     console.log('✓ Candidate transition check: PASSED');
     await exportSafetyArtifact('stats-candidate', existingData);
@@ -1388,8 +1465,10 @@ if (isDirectRun) main();
 
 export {
   aggregateSnapshots,
+  appendCreatorSnapshot,
   applyRetentionPolicy,
   determineRefreshTier,
+  extractCreatorFollowers,
   extractPostTitleFromHtml,
   processImages,
   retryAfterDelayMs

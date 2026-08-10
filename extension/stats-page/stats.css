@@ -103,6 +103,8 @@ body {
   background-color: #363a40;
 }
 
+.btn-compact { padding: 7px 10px; font-size: 12px; }
+
 .btn-icon {
   display: flex;
   align-items: center;
@@ -1337,3 +1339,166 @@ body {
   outline: none;
   border-color: var(--color-total, #be4bdb);
 }
+
+/* Creator analytics */
+.card-icon.followers {
+  background-color: rgba(132, 94, 247, 0.15);
+  color: #b197fc;
+}
+
+.insights-kpis {
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+}
+
+.insight-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.insight-kpi strong {
+  color: var(--text-primary);
+  font-size: 24px;
+}
+
+.insights-chart-container {
+  position: relative;
+  height: 330px;
+}
+
+.small-insights-chart {
+  position: relative;
+  height: 280px;
+}
+
+.insights-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+
+.activity-calendar {
+  display: grid;
+  grid-template-rows: repeat(7, 13px);
+  grid-auto-flow: column;
+  grid-auto-columns: 13px;
+  gap: 3px;
+  min-height: 109px;
+  overflow-x: auto;
+  padding: 4px 0 10px;
+}
+
+.calendar-cell,
+.calendar-legend i {
+  width: 13px;
+  height: 13px;
+  border-radius: 2px;
+  background: #303238;
+}
+
+.calendar-cell[data-level="1"], .calendar-legend i[data-level="1"] { background: #443269; }
+.calendar-cell[data-level="2"], .calendar-legend i[data-level="2"] { background: #6741a5; }
+.calendar-cell[data-level="3"], .calendar-legend i[data-level="3"] { background: #845ef7; }
+.calendar-cell[data-level="4"], .calendar-legend i[data-level="4"] { background: #b197fc; }
+.calendar-cell[data-negative="true"] { outline: 1px solid #ff6b6b; outline-offset: -1px; }
+
+.calendar-legend {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.records-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+}
+
+.record-item {
+  min-height: 92px;
+  padding: 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  background: var(--bg-tertiary);
+}
+
+.record-item strong,
+.record-item span {
+  display: block;
+}
+
+.record-item strong {
+  color: var(--text-primary);
+  margin: 5px 0 2px;
+  font-size: 17px;
+}
+
+.record-item span,
+.coverage-note {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.table-scroll { overflow-x: auto; }
+.insights-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.insights-table th, .insights-table td { padding: 10px 8px; border-bottom: 1px solid var(--border-color); text-align: right; }
+.insights-table th:first-child, .insights-table td:first-child { text-align: left; }
+.insights-table th { color: var(--text-muted); font-weight: 500; }
+.insights-table td { color: var(--text-secondary); }
+.post-cell { display: flex; align-items: center; gap: 9px; min-width: 180px; }
+.post-cell img { width: 34px; height: 34px; border-radius: 4px; object-fit: cover; }
+.post-cell a { color: var(--text-primary); text-decoration: none; max-width: 240px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+
+/* Thumbnail timeline legend and external tooltip */
+.timeline-chart-container { position: relative; }
+.timeline-legend { display: flex; flex-wrap: wrap; gap: 7px 12px; margin-top: 12px; }
+.timeline-legend-item { display: inline-flex; align-items: center; gap: 5px; color: var(--text-secondary); background: transparent; border: 0; cursor: pointer; font-size: 11px; opacity: 1; }
+.timeline-legend-item.is-hidden { opacity: 0.35; }
+.timeline-legend-item .legend-swatch { width: 9px; height: 9px; border-radius: 2px; }
+.timeline-legend-item img { width: 25px; height: 25px; border-radius: 3px; object-fit: cover; background: var(--bg-tertiary); }
+.timeline-tooltip { position: absolute; z-index: 5; min-width: 220px; max-width: 310px; padding: 10px; pointer-events: none; background: #25262bf2; border: 1px solid var(--border-color); border-radius: 7px; box-shadow: 0 8px 24px #0008; }
+.timeline-tooltip-title { color: var(--text-primary); font-size: 12px; margin-bottom: 7px; }
+.timeline-tooltip-row { display: grid; grid-template-columns: 8px 28px 1fr auto; align-items: center; gap: 6px; margin: 4px 0; font-size: 11px; }
+.timeline-tooltip-row img { width: 28px; height: 28px; border-radius: 3px; object-fit: cover; background: var(--bg-tertiary); }
+.timeline-thumb-placeholder { width: 28px; height: 28px; border-radius: 3px; background: var(--bg-tertiary); }
+.timeline-tooltip-row strong { color: var(--text-primary); }
+.timeline-tooltip-footer { border-top: 1px solid var(--border-color); color: var(--text-primary); margin-top: 7px; padding-top: 7px; font-size: 12px; }
+
+@media (max-width: 800px) {
+  .insights-kpis, .insights-grid { grid-template-columns: 1fr; }
+}
+
+/* Rename / public-title workflow */
+.rename-dialog {
+  width: min(520px, calc(100vw - 32px));
+  padding: 0;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  box-shadow: 0 20px 60px #000b;
+}
+
+.rename-dialog::backdrop { background: #000a; }
+.rename-dialog form { padding: 22px; }
+.rename-dialog h2 { color: var(--text-primary); font-size: 19px; margin-bottom: 6px; }
+.rename-description, .rename-warning { color: var(--text-muted); font-size: 12px; margin-bottom: 16px; }
+.rename-field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.rename-field input {
+  width: 100%;
+  padding: 10px;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font: inherit;
+}
+.rename-field input:focus { outline: 1px solid var(--accent-blue); border-color: var(--accent-blue); }
+.rename-scope { display: flex; flex-direction: column; gap: 7px; margin: 16px 0; padding: 12px; border: 1px solid var(--border-color); border-radius: 6px; }
+.rename-scope legend { padding: 0 5px; color: var(--text-muted); font-size: 12px; }
+.rename-scope label, .rename-public { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; }
+.rename-warning { margin: 7px 0 0 24px; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }

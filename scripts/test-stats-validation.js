@@ -32,6 +32,12 @@ const after = {
 };
 
 assert.equal(inspectStatsData(before).images, 1);
+assert.equal(inspectStatsData(before).formatVersion, 1, 'legacy data is interpreted as v1');
+assert.equal(inspectStatsData(before).creatorSnapshots, 0);
+assert.throws(
+  () => inspectStatsData({ ...before, formatVersion: 2 }),
+  /unsupported formatVersion 2/
+);
 assert.equal(assertSafeTransition(before, after).after.images, 2);
 assert.throws(
   () => assertSafeTransition(after, { ...after, images: [after.images[0]] }),
@@ -69,6 +75,56 @@ assert.throws(
 assert.throws(
   () => inspectStatsData({ ...before, images: [{ id: '1', snapshots: [] }] }),
   /image 1 has no snapshots/
+);
+
+const creatorBefore = {
+  ...before,
+  formatVersion: 1,
+  creatorSnapshots: [
+    { timestamp: '2026-08-09T00:00:00.000Z', followers: 100 },
+    { timestamp: '2026-08-10T00:00:00.000Z', followers: 101 }
+  ]
+};
+const creatorAfter = {
+  ...creatorBefore,
+  creatorSnapshots: [
+    ...creatorBefore.creatorSnapshots,
+    { timestamp: '2026-08-10T12:00:00.000Z', followers: 99 }
+  ]
+};
+assert.equal(
+  assertSafeTransition(creatorBefore, creatorAfter, {
+    candidateTimestamp: '2026-08-10T12:00:00.000Z'
+  }).after.creatorSnapshots,
+  3,
+  'a real follower decrease is retained as a valid absolute observation'
+);
+assert.throws(
+  () => assertSafeTransition(creatorBefore, {
+    ...creatorAfter,
+    creatorSnapshots: [
+      { ...creatorAfter.creatorSnapshots[0], followers: 98 },
+      ...creatorAfter.creatorSnapshots.slice(1)
+    ]
+  }, { candidateTimestamp: '2026-08-10T12:00:00.000Z' }),
+  /changed followers/
+);
+assert.throws(
+  () => inspectStatsData({
+    ...before,
+    creatorSnapshots: [{ timestamp: '2026-08-10T00:00:00.000Z', followers: -1 }]
+  }),
+  /followers is negative/
+);
+assert.throws(
+  () => inspectStatsData({
+    ...before,
+    creatorSnapshots: [
+      { timestamp: '2026-08-10T01:00:00.000Z', followers: 1 },
+      { timestamp: '2026-08-10T00:00:00.000Z', followers: 2 }
+    ]
+  }),
+  /not chronological/
 );
 
 const retentionReferenceTime = Date.parse('2026-08-10T12:00:00.000Z');

@@ -42,6 +42,7 @@
       <nav class="tab-bar" id="tabBar">
         <button class="tab-btn active" data-tab="overview">Overview</button>
         <button class="tab-btn" data-tab="trends">Trends</button>
+        <button class="tab-btn" data-tab="insights">Insights</button>
         <button class="tab-btn" data-tab="images">Images</button>
       </nav>
 
@@ -119,6 +120,13 @@
           <div class="card-content">
             <span class="card-value" id="totalCollects">-</span>
             <span class="card-label">Collects</span>
+          </div>
+        </div>
+        <div class="card summary-card" data-type="followers">
+          <div class="card-icon followers">&#x1F465;</div>
+          <div class="card-content">
+            <span class="card-value" id="totalFollowers">-</span>
+            <span class="card-label">Followers</span>
           </div>
         </div>
       </section>
@@ -280,6 +288,65 @@
       </section>
       </section><!-- /tab-trends -->
 
+      <!-- Insights Tab -->
+      <section class="tab-panel" id="tab-insights" hidden>
+        <section class="summary-cards insights-kpis">
+          <div class="card insight-kpi"><span class="card-label">Net followers · 7 days</span><strong id="followers7d">-</strong></div>
+          <div class="card insight-kpi"><span class="card-label">Net followers · 30 days</span><strong id="followers30d">-</strong></div>
+          <div class="card insight-kpi"><span class="card-label">Reactions · 30 days</span><strong id="reactions30d">-</strong></div>
+          <div class="card insight-kpi"><span class="card-label">Posts · 30 days</span><strong id="posts30d">-</strong></div>
+        </section>
+
+        <section class="card chart-section">
+          <div class="chart-header">
+            <div>
+              <h2>Creator growth</h2>
+              <span class="widget-sub">daily reactions, net follower change, and published posts · UTC</span>
+            </div>
+          </div>
+          <div class="insights-chart-container"><canvas id="creatorGrowthChart"></canvas></div>
+        </section>
+
+        <section class="card chart-section">
+          <div class="chart-header">
+            <div>
+              <h2>Activity calendar</h2>
+              <span class="widget-sub">last 12 months · UTC days</span>
+            </div>
+            <select id="calendarMetric" class="sort-select">
+              <option value="reactions">Reactions gained</option>
+              <option value="netFollowers">Net follower change</option>
+              <option value="publishedImages">Images published</option>
+              <option value="publishedPosts">Posts published</option>
+            </select>
+          </div>
+          <div class="activity-calendar" id="activityCalendar"></div>
+          <div class="calendar-legend"><span>Less</span><i data-level="0"></i><i data-level="1"></i><i data-level="2"></i><i data-level="3"></i><i data-level="4"></i><span>More</span></div>
+        </section>
+
+        <section class="card chart-section">
+          <div class="chart-header"><div><h2>Records &amp; milestones</h2><span class="widget-sub">calculated from the history you have actually collected</span></div></div>
+          <div class="records-grid" id="recordsGrid"></div>
+        </section>
+
+        <section class="insights-grid">
+          <div class="card chart-section">
+            <div class="chart-header"><div><h2>Post performance</h2><span class="widget-sub">all images in each Civitai post combined</span></div></div>
+            <div class="table-scroll"><table class="insights-table"><thead><tr><th>Post</th><th>Images</th><th>Total</th><th>7d</th></tr></thead><tbody id="postPerformanceBody"></tbody></table></div>
+          </div>
+          <div class="card chart-section">
+            <div class="chart-header"><div><h2>New work vs back catalog</h2><span class="widget-sub">daily reaction gains · “new” means published within 30 days</span></div></div>
+            <div class="small-insights-chart"><canvas id="catalogChart"></canvas></div>
+          </div>
+        </section>
+
+        <section class="card chart-section">
+          <div class="chart-header"><div><h2>Publish-age cohorts</h2><span class="widget-sub">median reactions at the same age, grouped by publish month</span></div></div>
+          <p class="coverage-note" id="cohortCoverage"></p>
+          <div class="table-scroll"><table class="insights-table"><thead><tr><th>Month</th><th>Covered images</th><th>Day 1</th><th>Day 7</th><th>Day 30</th><th>Day 90</th></tr></thead><tbody id="cohortBody"></tbody></table></div>
+        </section>
+      </section><!-- /tab-insights -->
+
       <!-- Images Tab -->
       <section class="tab-panel" id="tab-images" hidden>
       <!-- AoE2-style stacked timeline: each image is a colored band -->
@@ -296,9 +363,11 @@
             <button class="time-btn active" data-range="all">All</button>
           </div>
         </div>
-        <div class="chart-container">
+        <div class="chart-container timeline-chart-container">
           <canvas id="imagesTimelineChart"></canvas>
+          <div class="timeline-tooltip" id="timelineTooltip" hidden></div>
         </div>
+        <div class="timeline-legend" id="timelineLegend"></div>
       </section>
       <!-- Images Section -->
       <section class="card images-section">
@@ -306,6 +375,7 @@
           <h2>Your Images</h2>
           <div class="images-controls">
             <span class="image-count" id="imageCount">0 images</span>
+            <button class="btn btn-secondary btn-compact" id="undoTitleBtn" hidden>Undo last Civitai title</button>
             <select id="sortSelect" class="sort-select">
               <option value="newest">Newest First</option>
               <option value="oldest">Oldest First</option>
@@ -368,9 +438,35 @@
     </main>
   </div>
 
+  <dialog class="rename-dialog" id="renameDialog">
+    <form method="dialog" id="renameForm">
+      <h2>Rename image or post</h2>
+      <p class="rename-description" id="renameDescription"></p>
+      <label class="rename-field">
+        <span>Name</span>
+        <input type="text" id="renameInput" maxlength="80" autocomplete="off">
+      </label>
+      <fieldset class="rename-scope">
+        <legend>Use this name for</legend>
+        <label><input type="radio" name="renameScope" value="image"> This image only</label>
+        <label id="renamePostScope"><input type="radio" name="renameScope" value="post"> Every image in this post (with “pt. N” labels)</label>
+      </fieldset>
+      <label class="rename-public" id="renamePublicOption">
+        <input type="checkbox" id="renamePublic" checked>
+        Also change the public post title on Civitai
+      </label>
+      <p class="rename-warning" id="renameWarning">This uses an already signed-in Civitai tab. The extension never reads or stores your session cookie.</p>
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" type="button" value="cancel" id="renameCancelBtn">Cancel</button>
+        <button class="btn btn-primary" value="save" id="renameSaveBtn">Save</button>
+      </div>
+    </form>
+  </dialog>
+
   <script src="../lib/chart.min.js"></script>
   <script src="../lib/snapshot-codec.js"></script>
   <script src="../lib/safe-values.js"></script>
+  <script src="../lib/insights-analytics.js"></script>
   <script src="stats.js"></script>
 </body>
 </html>

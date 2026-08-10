@@ -16,6 +16,12 @@ This project consists of two components:
 - **Summary cards** with total likes 👍, hearts ❤️, laughs 😂, cries 😢, and comments 💬
 - **Per-image statistics** with sorting by date, reactions, or comments
 - **Readable image names** from your post titles, with a rename box for the rest
+- **Follower history** with honest daily net-change reporting (gains and unfollows)
+- **Creator Insights** with activity calendar, publish-impact overlay, records,
+  milestones, combined post rankings, back-catalog gains, and publish-age cohorts
+- **Thumbnail-rich image timeline** in both the legend and hover details
+- **Optional Civitai title write-back** through an already signed-in tab, with
+  conflict detection, verification, and one-step undo
 - **Dark theme** matching Civitai's aesthetic
 - **Smart data retention** - Automatic aggregation (hourly → 6-hour → daily) limits Gist growth while preserving long-term trends
 - **Resilient API calls** - Exponential backoff retry logic with rate limit handling
@@ -149,8 +155,12 @@ The stats are stored in your Gist as JSON with time-series data:
 
 ```json
 {
+  "formatVersion": 1,
   "username": "YourUsername",
   "lastUpdated": "2024-01-15T10:00:00Z",
+  "creatorSnapshots": [
+    { "timestamp": "2024-01-15T10:00:00Z", "followers": 1250 }
+  ],
   "totalSnapshots": [
     {
       "timestamp": "2024-01-15T09:00:00Z",
@@ -202,6 +212,12 @@ The stats are stored in your Gist as JSON with time-series data:
 ```
 
 **Key Points:**
+- **`formatVersion: 1`** - Explicit schema version. Files written before this
+  field existed are accepted as legacy version 1; unknown versions are rejected
+  instead of being guessed.
+- **`creatorSnapshots`** - Absolute follower totals. The dashboard derives net
+  change between observations, so unfollows remain visible rather than being
+  clamped away. A failed follower request adds no point and never invents zero.
 - **`totalSnapshots`** - Aggregate stats across all images at each timestamp
 - **`images[].snapshots`** - Individual image stats history for charting trends
 - **Time-series data** - Every hourly run adds a new snapshot to track growth over time
@@ -301,10 +317,17 @@ So the extension builds a name, taking the first of these that exists:
 
 Hovering a name shows where it came from, plus the post it belongs to.
 
-**Renaming is local.** Names live in `chrome.storage.local` on that browser — they
-are not written to Civitai and not synced between machines. Renaming an image that
-shares a post asks whether to name the whole post or just that one image; clearing
-the box restores the automatic name.
+The rename dialog keeps two choices separate:
+
+- **Local display scope:** change only this image, or all images in its post with
+  derived `pt. N` labels. These local choices live in `chrome.storage.local` and
+  are not synced between machines.
+- **Public Civitai title:** an independent checkbox writes the plain title (never
+  the `pt. N` suffix) to the post. This requires an already open, signed-in tab on
+  the image's Civitai host. The extension checks the current server title before
+  writing, verifies it afterward, and stores one undo record locally. If the
+  server title changed meanwhile, it asks before overwriting. A failed public
+  write leaves the local rename intact and reports the failure.
 
 **About `pt. 1` / `pt. 2`:** that numbering exists only in this extension. A Civitai
 post has a single title shared by all the images in it, and images have no title of
@@ -490,10 +513,13 @@ The API authentication details and tRPC wire formats are documented in
   history, base models, cached post titles, and prompt-derived names when Civitai
   supplies them.
 - The extension reads that Gist and opens Civitai links; it does not send the
-  dataset to an additional analytics service.
+  dataset to an additional analytics service. An explicitly requested public
+  title change runs as a same-origin request in an open Civitai tab.
 - Civitai credentials stay in GitHub Actions secrets and are not available to
   the extension.
-- Local custom names remain in `chrome.storage.local` on that browser.
+- Local custom names and the most recent title-undo record remain in
+  `chrome.storage.local` on that browser. The extension never reads, copies, or
+  stores the Civitai session cookie.
 
 ## License
 

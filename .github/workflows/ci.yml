@@ -36,6 +36,7 @@ jobs:
           node --check extension/service-worker.js
           node --check extension/content/content.js
           node --check extension/popup/popup.js
+          node --check extension/lib/insights-analytics.js
           node --check extension/stats-page/stats.js
 
       - name: Exercise posting-time analyzer with synthetic data
