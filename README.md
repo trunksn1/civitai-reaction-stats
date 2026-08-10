@@ -20,8 +20,9 @@ This project consists of two components:
 - **Creator Insights** with activity calendar, publish-impact overlay, records,
   milestones, combined post rankings, back-catalog gains, and publish-age cohorts
 - **Thumbnail-rich image timeline** in both the legend and hover details
-- **Optional Civitai title write-back** through an already signed-in tab, with
-  conflict detection, verification, and one-step undo
+- **Optional Civitai title write-back** through independent OAuth/PKCE, with no
+  open Civitai tab, conflict detection, verification, and safe undo when the
+  original post already had a title
 - **Dark theme** matching Civitai's aesthetic
 - **Smart data retention** - Automatic aggregation (hourly → 6-hour → daily) limits Gist growth while preserving long-term trends
 - **Resilient API calls** - Exponential backoff retry logic with rate limit handling
@@ -109,8 +110,33 @@ Civitai issues a **single account-wide API key** (civitai.com → Account settin
    ```
    https://gist.githubusercontent.com/YOUR_USERNAME/YOUR_GIST_ID/raw/stats.json
    ```
-3. Click **Save**
-4. The status should change to "Configured"
+3. Click **Save settings**
+4. The stats-data status should change to "Stats Gist configured"
+
+### 7. Optional: connect Civitai OAuth for public title changes
+
+Reading the stats does not require OAuth. Connect it only if you want the rename
+dialog to update public Civitai post titles without keeping a Civitai tab open.
+
+1. Load the unpacked extension first, then open its popup.
+2. Copy **Redirect URL to register exactly**. It has the form
+   `https://EXTENSION_ID.chromiumapp.org/oauth2`.
+3. In Civitai **Account Settings -> OAuth Applications**, create a
+   **Browser / Mobile App** and register that redirect URL byte-for-byte.
+4. Give the app only **Profile & Settings Read**, **Media & Posts Read**, and
+   **Media & Posts Write**. The extension requests their integer scope mask `97`.
+5. Paste the app's **public client ID** into the popup. Do not create, paste, or
+   store a client secret for this public PKCE client.
+6. Click **Connect Civitai**, authorize the three permissions, and confirm the
+   popup reports the connected username.
+
+The redirect URL is derived from the Chrome extension ID. Another Chrome
+profile or another unpacked copy can receive a different ID and therefore need
+its own registered redirect URL. The public client ID is synced by Chrome; OAuth
+access and rotating refresh tokens stay in protected extension-local storage.
+
+**Disconnect** deletes the local tokens. To revoke the grant on Civitai itself,
+remove it from Civitai's OAuth Applications settings.
 
 ## Manual Stats Refresh
 
@@ -138,7 +164,7 @@ This will fetch fresh stats for every image, regardless of age.
 - `monthly` - Refresh up to 6 months
 - `quarterly` - Refresh ALL images (use this to force full refresh)
 
-### 7. Using the Extension
+### 8. Using the Extension
 
 **Option 1: Via Extension Popup**
 - Click the extension icon → Click "Open Stats"
@@ -322,12 +348,19 @@ The rename dialog keeps two choices separate:
 - **Local display scope:** change only this image, or all images in its post with
   derived `pt. N` labels. These local choices live in `chrome.storage.local` and
   are not synced between machines.
-- **Public Civitai title:** an independent checkbox writes the plain title (never
-  the `pt. N` suffix) to the post. This requires an already open, signed-in tab on
-  the image's Civitai host. The extension checks the current server title before
-  writing, verifies it afterward, and stores one undo record locally. If the
-  server title changed meanwhile, it asks before overwriting. A failed public
-  write leaves the local rename intact and reports the failure.
+- **Public Civitai title:** an independent, unchecked checkbox writes the plain
+  title (never the `pt. N` suffix) through the OAuth connection. No Civitai tab
+  or login cookie is needed. The extension checks the current server title
+  before writing, verifies it afterward, and stores one undo record locally when
+  the previous title was non-empty. If the server title changed meanwhile, it
+  asks before overwriting. A failed public write leaves the local rename intact
+  and reports the failure.
+
+Civitai's current update service ignores an empty title instead of clearing the
+existing title. The extension therefore refuses public blank-title writes. It
+can rename a previously untitled post, but it cannot automatically undo that
+specific first title back to "untitled"; the dialog reports this instead of
+offering an unusable Undo action.
 
 **About `pt. 1` / `pt. 2`:** that numbering exists only in this extension. A Civitai
 post has a single title shared by all the images in it, and images have no title of
@@ -365,8 +398,17 @@ otherwise almost everything would still show a bare id.
 ### Extension shows "Not configured"
 - Make sure you've entered the Gist raw URL in the popup
 - The URL format should be: `https://gist.githubusercontent.com/USERNAME/GIST_ID/raw/stats.json`
-- Click "Save" after entering the URL
+- Click "Save settings" after entering the URL
 - The status should change to "Configured ✓"
+
+### Civitai OAuth will not connect
+
+- Copy the redirect URL from the currently loaded extension and register it
+  exactly in a Civitai **Browser / Mobile App**.
+- Confirm the app allows Profile Read, Media Read, and Media Write, then reconnect.
+- Paste only the public client ID; this extension never uses a client secret.
+- An unpacked extension loaded in another Chrome profile may have a different
+  redirect URL.
 
 ### Stats not loading in extension
 - Check that your Gist is **public** (private Gists won't work)
@@ -514,12 +556,16 @@ The API authentication details and tRPC wire formats are documented in
   supplies them.
 - The extension reads that Gist and opens Civitai links; it does not send the
   dataset to an additional analytics service. An explicitly requested public
-  title change runs as a same-origin request in an open Civitai tab.
+  title change sends the post id and new title directly to Civitai's tRPC API
+  using the user's OAuth grant.
 - Civitai credentials stay in GitHub Actions secrets and are not available to
-  the extension.
+  the extension. The optional OAuth connection is separate: its public client ID
+  is stored in `chrome.storage.sync`, while access/refresh tokens and identity
+  stay in `chrome.storage.local`, restricted to trusted extension contexts.
 - Local custom names and the most recent title-undo record remain in
   `chrome.storage.local` on that browser. The extension never reads, copies, or
-  stores the Civitai session cookie.
+  stores the Civitai session cookie or a client secret. OAuth disconnect is local;
+  server-side revocation remains available in Civitai OAuth Applications settings.
 
 ## License
 

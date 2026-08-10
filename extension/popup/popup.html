@@ -10,25 +10,65 @@
   <div class="popup-container">
     <h1>Civitai Reaction Stats</h1>
 
-    <div class="status-indicator" id="statusIndicator">
-      <span class="status-icon" id="statusIcon"></span>
-      <span class="status-text" id="statusText">Checking...</span>
-    </div>
+    <section class="settings-section">
+      <h2>Stats data</h2>
+      <div class="status-indicator" id="gistStatusIndicator">
+        <span class="status-icon"></span>
+        <span class="status-text" id="gistStatusText">Checking...</span>
+      </div>
 
-    <div class="form-group">
-      <label for="gistUrl">Gist Raw URL</label>
-      <input
-        type="url"
-        id="gistUrl"
-        placeholder="https://gist.githubusercontent.com/user/id/raw/stats.json"
-      >
-      <p class="hint">
-        Enter the raw URL of your stats.json Gist file
+      <div class="form-group">
+        <label for="gistUrl">Gist Raw URL</label>
+        <input
+          type="url"
+          id="gistUrl"
+          placeholder="https://gist.githubusercontent.com/user/id/raw/stats.json"
+        >
+        <p class="hint">Enter the raw URL of your stats.json Gist file.</p>
+      </div>
+    </section>
+
+    <section class="settings-section oauth-section">
+      <h2>Civitai title access</h2>
+      <div class="status-indicator" id="oauthStatusIndicator">
+        <span class="status-icon"></span>
+        <span class="status-text" id="oauthStatusText">Checking...</span>
+      </div>
+
+      <p class="section-copy">
+        OAuth lets this extension rename your public post titles independently;
+        no Civitai tab or session cookie is needed.
       </p>
-    </div>
 
-    <div class="button-group">
-      <button id="saveBtn" class="btn btn-primary">Save</button>
+      <div class="form-group">
+        <label for="oauthClientId">Public OAuth client ID</label>
+        <input type="text" id="oauthClientId" autocomplete="off" spellcheck="false">
+        <p class="hint">
+          Create a Browser / Mobile OAuth app in Civitai with Profile Read,
+          Media Read, and Media Write. Do not enter a client secret.
+        </p>
+      </div>
+
+      <div class="form-group">
+        <label for="oauthRedirectUri">Redirect URL to register exactly</label>
+        <div class="copy-row">
+          <input type="text" id="oauthRedirectUri" readonly>
+          <button id="copyRedirectBtn" class="btn btn-small" type="button">Copy</button>
+        </div>
+        <p class="hint">An unpacked extension may get a different URL on another Chrome profile.</p>
+      </div>
+
+      <div class="button-group oauth-buttons">
+        <button id="connectOAuthBtn" class="btn btn-primary" type="button">Connect Civitai</button>
+        <button id="disconnectOAuthBtn" class="btn btn-danger" type="button" disabled>Disconnect</button>
+      </div>
+      <p class="revocation-note">
+        Disconnect removes local tokens. Revoke the grant itself from Civitai's OAuth Applications settings.
+      </p>
+    </section>
+
+    <div class="button-group main-buttons">
+      <button id="saveBtn" class="btn btn-secondary">Save settings</button>
       <button id="openStatsBtn" class="btn btn-secondary">Open Stats</button>
     </div>
 

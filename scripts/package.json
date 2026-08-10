@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "fetch": "node fetch-stats.js",
-    "test": "node test-codec.js && node test-trpc.js && node test-safe-values.js && node test-insights-analytics.js && node test-ui-contract.js && node test-stats-validation.js && node test-collector-core.js",
+    "test": "node test-codec.js && node test-trpc.js && node test-safe-values.js && node test-insights-analytics.js && node test-oauth-client.js && node test-ui-contract.js && node test-stats-validation.js && node test-collector-core.js",
     "validate:stats": "node validate-stats-file.js"
   },
   "dependencies": {

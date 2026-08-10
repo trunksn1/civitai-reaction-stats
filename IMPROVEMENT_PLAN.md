@@ -77,12 +77,12 @@ histories (union by timestamp — safe because snapshots are cumulative).
 
 | # | Task | Detail | Size |
 |---|------|--------|------|
-| 5.0 | Authentication and endpoint probe | Before architecture work, test Chrome-extension PKCE, cookie behavior, `.com`/`.red`, `image.getInfinite`, `image.get`, `image.getGenerationData`, and refresh-token rotation. OAuth works on tRPC but not REST v1; decode both tRPC wire formats. Record a credential/endpoint matrix and fail loudly on plausible empty results. | M |
+| 5.0 | Partial: authentication and endpoint probe | The Chrome identity/PKCE foundation, minimal scope `97`, `/userinfo`, rotating refresh-token persistence, `.com`/`.red` direct tRPC client, and both tRPC decoders are implemented for title write-back. A registered-client live probe must still prove the Chromium redirect plus DNR-adjusted Origin/Referer path; discovery and generation-data endpoints remain unproven for local collection. OAuth works on tRPC but not REST v1. | M |
 | 5.1 | Storage layer | IndexedDB wrapper in the service worker (`extension/lib/db.js`): same logical schema as the gist JSON (meta, totalSnapshots, per-image snapshots). Add `unlimitedStorage` permission. | M |
 | 5.2 | Port collector into service worker | New `extension/collector.js` reusing the codec + tier logic: discovery (incremental, both hosts), per-image tRPC refresh, clamping, retention. Use the credential/endpoint strategy proven in 5.0—prefer OAuth for tRPC, use an API key only where REST v1 remains necessary, and rely on cookies only if the extension-origin probe proves it robust. Rate limits: keep batch=5 / 300ms. | L |
 | 5.3 | Scheduling | `chrome.alarms.create('collect', {periodInMinutes: 45})`; on fire, skip if last successful run < 30 min ago; catch-up run on browser startup. MV3 note: each alarm wakes the SW fresh — collector must checkpoint progress (per-phase) to survive SW termination on long runs. | M |
 | 5.4 | Data-source abstraction | `stats.js` reads via one interface with two providers: `local` (IndexedDB) and `gist` (current behavior). Popup gets a source selector: "Collect locally (default)" / "Read from Gist URL". | M |
-| 5.5 | Onboarding | First-run OAuth Authorization Code + PKCE with the smallest scope proven in 5.0; identify the user through `/userinfo`, confirm in popup, and start first collection with progress UI. Persist rotating refresh tokens safely and serialize refreshes. | M |
+| 5.5 | Partial: onboarding | Popup OAuth connection is implemented: it displays the exact redirect, accepts only a public client ID, runs Authorization Code + PKCE, identifies the account through `/userinfo`, protects tokens in extension-local storage, serializes refreshes, and supports local disconnect. First-run onboarding and starting a local collection remain part of the future extension-first mode. | M |
 | 5.6 | Import/export | Export local DB as `stats.json` (same schema — the collector's format is the interchange format); import an existing gist file to keep history when migrating from the Actions setup. | M |
 | 5.7 | Web Store packaging | Icons/screenshots, privacy policy (all data local; nothing leaves the browser in local mode — also fixes the public-prompt privacy issue), zip pipeline, submit. | M |
 | 5.8 | Docs rewrite | README: "Install extension" as the primary path; GitHub Actions + gist demoted to an optional "24/7 collection" appendix for power users. | M |
@@ -281,27 +281,28 @@ Flow:
   the "spread across post" flag), not as N literal strings. Otherwise adding an image to
   the post later leaves the numbering stale and unfixable.
 
-### 7.7 🟡 Write-back to Civitai **[L]** — implementation complete; live owner probe required
+### 7.7 🟡 Write-back to Civitai **[L]** — independent OAuth implemented; live owner probe required
 
-The same-origin signed-in-tab relay, narrow `{ id, title }` mutation, pre-write
-conflict check, post-write re-read, cached-title update, harmless failure path, and
-one-step local undo are implemented. Do not mark this fully shipped until an owner
-tests a disposable title in Civitai and verifies that the upstream tRPC wire behavior
-still accepts the non-batched mutation used here. No automated test should mutate a
-real public post.
+The signed-in-tab relay has been replaced by a fully independent OAuth/PKCE path.
+It requests only scope `97`, stores rotating tokens in protected extension-local
+storage, applies narrowly scoped temporary Origin/Referer rules for direct Civitai
+tRPC calls, and supports both `.com` and `.red`. The narrow `{ id, title }`
+mutation, authoritative conflict check, post-write re-read, cached-title update,
+harmless failure path, and one-step undo for an existing non-empty title are
+implemented. No open Civitai tab or session cookie is used.
+
+Do not mark this fully shipped until the owner registers the popup's exact
+Chromium redirect URL, completes consent, and tests a disposable title on the
+real deployed tRPC path. No automated test should mutate a real public post.
+Current Civitai service code ignores null/empty titles, so the extension refuses
+public clearing and cannot promise undo-to-untitled.
 
 Mutating the user's live account. Requirements:
 
-- **Probe OAuth `post.update` first.** The verified Media & Posts Write scope works for
-  tRPC creation; capture and test the exact update mutation with a throwaway title. If
-  OAuth works, prefer it over cookie relay and request only the minimal scope.
-- **Same-origin fallback.** If OAuth cannot update, the stats page is a
-  `chrome-extension://` origin; Civitai's
-  session cookie will not ride a cross-site POST under `SameSite=Lax`. So route it:
-  stats page → `chrome.runtime` message → service worker → content script on an open
-  `civitai.com` tab → same-origin `fetch('/api/trpc/post.update', …)` with
-  `credentials: 'include'`. If no Civitai tab is open, prompt the user rather than opening
-  one silently.
+- **Probe OAuth `post.update` live.** The code path is present, but the registered
+  extension must still exercise a throwaway title and restore a non-empty original.
+  The extension deliberately has no cookie-relay fallback: OAuth failure is loud and
+  harmless instead of silently depending on browser login state.
 - **Verify the mutation shape by observation first.** Rename a post in the Civitai UI with
   DevTools open, capture the exact `post.update` request (input envelope, whether a CSRF
   header rides along, whether omitted fields are treated as cleared), and mirror it. Do
@@ -353,8 +354,9 @@ Conclusion: `CIVITAI_API_KEY` is honoured on tRPC. Only unauthenticated callers 
 - **7.3 should try tRPC `post.get` with the API key first**, and fall back to HTML scraping
   only if that 401s. A tRPC call is a few hundred bytes against ~110 KB for a post page —
   roughly a 100× saving on the backfill, which turns a multi-day drip into a single run.
-- 7.7's write path is still unproven: reads authenticate with a Bearer key, but a *mutation*
-  needs the user's session cookie. Capturing the real request from DevTools remains required.
+- 7.7 now uses an independent OAuth bearer grant rather than the scheduled collector's
+  API key or a session cookie. Source and unit-level wire checks pass; a registered
+  extension must still complete the disposable live mutation probe.
 
 <details>
 <summary>Original concern (superseded)</summary>

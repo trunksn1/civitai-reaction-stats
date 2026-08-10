@@ -9,7 +9,8 @@ body {
   font-size: 14px;
   background-color: #1a1b1e;
   color: #c1c2c5;
-  min-width: 320px;
+  min-width: 380px;
+  max-width: 420px;
 }
 
 .popup-container {
@@ -20,8 +21,20 @@ h1 {
   font-size: 16px;
   font-weight: 600;
   color: #fff;
-  margin-bottom: 12px;
+  margin-bottom: 16px;
   text-align: center;
+}
+
+h2 {
+  color: #f1f3f5;
+  font-size: 14px;
+  margin-bottom: 10px;
+}
+
+.settings-section {
+  border-bottom: 1px solid #2c2e33;
+  margin-bottom: 16px;
+  padding-bottom: 4px;
 }
 
 .status-indicator {
@@ -50,6 +63,10 @@ h1 {
   background-color: #ff6b6b;
 }
 
+.status-indicator.warning .status-icon {
+  background-color: #fab005;
+}
+
 .status-text {
   font-size: 13px;
   color: #909296;
@@ -67,7 +84,8 @@ label {
   margin-bottom: 6px;
 }
 
-input[type="url"] {
+input[type="url"],
+input[type="text"] {
   width: 100%;
   padding: 10px 12px;
   font-size: 13px;
@@ -79,12 +97,42 @@ input[type="url"] {
   transition: border-color 0.2s;
 }
 
-input[type="url"]:focus {
+input[type="url"]:focus,
+input[type="text"]:focus {
   border-color: #228be6;
 }
 
-input[type="url"]::placeholder {
+input[type="url"]::placeholder,
+input[type="text"]::placeholder {
   color: #5c5f66;
+}
+
+input[readonly] {
+  color: #868e96;
+}
+
+.section-copy,
+.revocation-note {
+  color: #909296;
+  font-size: 12px;
+  line-height: 1.45;
+  margin: -4px 0 14px;
+}
+
+.revocation-note {
+  color: #5c5f66;
+  font-size: 11px;
+  margin: 8px 0 12px;
+}
+
+.copy-row {
+  display: flex;
+  gap: 6px;
+}
+
+.copy-row input {
+  flex: 1;
+  min-width: 0;
 }
 
 .hint {
@@ -132,6 +180,26 @@ input[type="url"]::placeholder {
   background-color: #424549;
 }
 
+.btn-danger {
+  background-color: #c92a2a;
+  color: #fff;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background-color: #a61e1e;
+}
+
+.btn-small {
+  background-color: #373a40;
+  color: #c1c2c5;
+  flex: 0 0 auto;
+  padding: 8px 10px;
+}
+
+.main-buttons {
+  margin-top: 2px;
+}
+
 .message {
   margin-top: 12px;
   padding: 8px 12px;
@@ -151,4 +219,10 @@ input[type="url"]::placeholder {
   display: block;
   background-color: rgba(255, 107, 107, 0.15);
   color: #ff6b6b;
+}
+
+.message.warning {
+  display: block;
+  background-color: rgba(250, 176, 5, 0.15);
+  color: #fab005;
 }

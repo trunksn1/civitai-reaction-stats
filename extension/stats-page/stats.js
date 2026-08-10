@@ -1990,7 +1990,8 @@ function requestRename(image) {
   postScope.hidden = !hasPost;
   publicOption.hidden = !hasPost;
   warning.hidden = !hasPost;
-  publicCheckbox.checked = hasPost;
+  // Public mutation is a separate, explicit choice on every rename.
+  publicCheckbox.checked = false;
   form.elements.renameScope.value = hasPost ? 'post' : 'image';
 
   return new Promise(resolve => {
@@ -2063,10 +2064,15 @@ async function startRename(imageId) {
   if (!request) return;
   const original = automaticName(image);
   let publicError = null;
+  let publicNotice = null;
   if (request.writePublic) {
     const nextTitle = publicTitleFromName(request.value);
     const expectedTitle = postTitleOf(image);
-    if (nextTitle !== expectedTitle) {
+    if (!nextTitle) {
+      publicError = new Error(
+        'Civitai currently cannot reliably clear a public post title. Enter a title or uncheck the public-title option.'
+      );
+    } else if (nextTitle !== expectedTitle) {
       try {
         const result = await writeCivitaiTitle(image, nextTitle, expectedTitle);
         statsData.postTitles = statsData.postTitles || {};
@@ -2075,14 +2081,20 @@ async function startRename(imageId) {
           title: result.title,
           fetchedAt: new Date().toISOString()
         };
-        lastCivitaiTitleWrite = {
-          postId: String(image.postId),
-          host: image.host || 'com',
-          previousTitle: result.previousTitle,
-          title: result.title,
-          timestamp: new Date().toISOString()
-        };
-        await chrome.storage.local.set({ lastCivitaiTitleWrite });
+        if (result.undoAvailable && result.previousTitle) {
+          lastCivitaiTitleWrite = {
+            postId: String(image.postId),
+            host: image.host || 'com',
+            previousTitle: result.previousTitle,
+            title: result.title,
+            timestamp: new Date().toISOString()
+          };
+          await chrome.storage.local.set({ lastCivitaiTitleWrite });
+        } else {
+          lastCivitaiTitleWrite = null;
+          await chrome.storage.local.remove('lastCivitaiTitleWrite');
+          publicNotice = 'The public title was changed. This post was previously untitled, and Civitai currently cannot restore the untitled state through this API, so Undo is unavailable for this change.';
+        }
       } catch (error) {
         publicError = error;
       }
@@ -2093,11 +2105,19 @@ async function startRename(imageId) {
   await saveCustomImageNames();
   renderStats();
   if (publicError) alert(`The local name was saved, but Civitai was not changed.\n\n${publicError.message}`);
+  else if (publicNotice) alert(publicNotice);
 }
 
 async function undoLastCivitaiTitle() {
   const undo = lastCivitaiTitleWrite;
   if (!undo) return;
+  if (!undo.previousTitle) {
+    lastCivitaiTitleWrite = null;
+    await chrome.storage.local.remove('lastCivitaiTitleWrite');
+    renderStats();
+    alert('Civitai currently cannot restore an untitled state through this API. The unusable Undo record was removed.');
+    return;
+  }
   const image = (statsData.images || []).find(item => String(item.postId) === String(undo.postId));
   if (!image) {
     alert('The post for the last title change is not present in the loaded stats.');

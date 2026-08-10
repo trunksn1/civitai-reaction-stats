@@ -29,6 +29,7 @@ Chrome extension
   -> fetch raw stats.json through its service worker
   -> decode snapshots with the shared codec
   -> render Overview, Trends, and Images views
+  -> optionally authorize with Civitai OAuth/PKCE and write verified post titles
 ```
 
 ## Repository map
@@ -42,10 +43,11 @@ extension/
   content/                   Stats-menu injection on .com and .red
   lib/
     chart.min.js             vendored Chart.js
+    civitai-oauth.js         tested PKCE/scope/token/tRPC/DNR helpers
     insights-analytics.js    pure daily/post/cohort/record calculations
     safe-values.js           tested HTML/URL rendering guards
     snapshot-codec.js        shared absolute/delta codec
-  popup/                     Gist URL settings
+  popup/                     Gist settings and Civitai OAuth connection
   stats-page/                dashboard
   manifest.json              MV3 manifest
   service-worker.js          settings, Gist fetch, tabs, verified title relay
@@ -269,11 +271,29 @@ allow decreases, because those represent real net unfollows.
 
 ### Service worker and popup
 
-The popup validates and stores a Gist URL in `chrome.storage.sync`. The service
-worker cache-busts and fetches that URL, returns parsed JSON to the stats page,
-and opens the dashboard tab. For an explicitly requested public-title change it
-also injects a narrow same-origin operation into an already open Civitai tab;
-session cookies never cross into extension storage or messages.
+The popup validates and stores a Gist URL and public Civitai OAuth client ID in
+`chrome.storage.sync`. It displays `chrome.identity.getRedirectURL('oauth2')` so
+the exact Chromium redirect can be registered in a Civitai Browser / Mobile app.
+
+The service worker cache-busts and fetches the Gist, returns parsed JSON to the
+stats page, and opens the dashboard tab. Optional title access uses OAuth
+Authorization Code + PKCE S256 with scope `97` (identity read, media read, media
+write). It exchanges the code without a client secret, fetches `/userinfo`, and
+stores the access token, rotating refresh token, expiry, granted scope, and
+identity together in `chrome.storage.local`. Local storage access is restricted
+to trusted extension contexts; refreshes are serialized and every replacement
+refresh token is persisted before waiting callers resume. A 4xx refresh failure
+clears the local session; network/5xx errors do not destroy a potentially valid
+grant. Disconnect is local, while grant revocation remains a Civitai account
+setting.
+
+Civitai's tRPC bearer-token middleware currently requires browser-like `Origin`
+and `Referer` values matching the selected `.com` or `.red` host. JavaScript
+cannot set these forbidden headers directly, so the service worker temporarily
+installs a `declarativeNetRequest` session rule. The rule is limited to the exact
+Civitai hostname, extension initiator, XHR resource type, and a private request
+marker, then removed in `finally`. tRPC requests are serialized so one request
+cannot remove another's temporary rule. No Civitai tab or session cookie is used.
 
 The popup currently accepts raw Gist hosts only as configuration; normalization
 of ordinary Gist page URLs is separate UX work.
@@ -314,10 +334,16 @@ Display names resolve in this order:
 
 Local overrides live in `chrome.storage.local`. The rename dialog independently
 controls local image/post scope and optional public post-title write-back. The
-write path performs an authoritative pre-read, detects conflicts, submits only
-`{ id, title }`, re-reads to verify, updates the in-memory title cache, and keeps
-one local undo record. It fails without changing the public post when no suitable
-signed-in tab exists or the upstream call cannot be verified.
+public checkbox starts unchecked on every dialog. The OAuth write path performs
+an authoritative pre-read, detects conflicts, submits only `{ id, title }`,
+re-reads to verify, updates the in-memory title cache, and keeps one local undo
+record when the old title was non-empty. It fails without changing the public
+post when OAuth is disconnected or the upstream call cannot be verified.
+
+Current upstream `updatePost` behavior treats a null/empty title as an omitted
+update, so public title clearing is refused. A newly titled, previously untitled
+post cannot offer an honest automatic undo until Civitai supports clearing the
+field through this endpoint.
 
 ## Testing
 
@@ -349,8 +375,9 @@ history even if current totals could be reconstructed.
 ## API and privacy constraints
 
 - Civitai REST and tRPC are external, partially undocumented dependencies.
-- OAuth currently works on tRPC but not REST v1. The application does not yet
-  implement OAuth; see [CIVITAI_OAUTH_INTEGRATION_GUIDE.md](./CIVITAI_OAUTH_INTEGRATION_GUIDE.md).
+- OAuth is implemented for extension title read/write over tRPC; REST v1 still
+  rejects OAuth. The scheduled collector remains API-key/Gist based. See
+  [CIVITAI_OAUTH_INTEGRATION_GUIDE.md](./CIVITAI_OAUTH_INTEGRATION_GUIDE.md).
 - The current storage mode is a public Gist. It exposes the account identifier,
   image metadata, post titles, and historical counters described in README.
 - Gist mode remains the authoritative 24/7 path. A future local IndexedDB mode
