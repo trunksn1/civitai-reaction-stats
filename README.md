@@ -65,10 +65,14 @@ Chrome Extension ◄── reads ◄── gist.githubusercontent.com
 | `GIST_ID` | Your Gist ID from step 1 | ✅ Yes |
 | `GIST_TOKEN` | Your Personal Access Token from step 2 | ✅ Yes |
 | `CIVITAI_USERNAME` | Your Civitai username | ✅ Yes |
-| `CIVITAI_API_KEY` | Your Civitai API key (helps get accurate stats) | ⚠️ Optional |
+| `CIVITAI_API_KEY` | Your account-wide Civitai API key (required for live buzz/collect/view counters) | ⚠️ Recommended |
 | `CIVITAI_RED_API_KEY` | Rarely needed — your one account-wide `CIVITAI_API_KEY` already works on civitai.red. Optional override only | ⚠️ Optional |
 
-**Note:** The `CIVITAI_API_KEY` is optional but recommended. Without it, the script uses unauthenticated requests which may have lower rate limits.
+**Note:** Collection still works without `CIVITAI_API_KEY`: discovery and the
+core reaction/comment counters fall back to REST. Authenticated tRPC is required
+for live buzz, collect, and view counters; without a key those extended fields
+are carried forward at their last known values. Broad tRPC failures abort before
+the Gist write so an apparently successful run cannot silently freeze them.
 
 **civitai.red (R-rated and harder content):** Civitai moved R+ content to a separate domain, `civitai.red`. The collector now queries **both** `civitai.com` and `civitai.red` so reactions on your R+ images keep being tracked. This is on by default; set the `CIVITAI_RED_ENABLED` repo variable to `false` to disable it.
 
@@ -397,9 +401,13 @@ clamping resumes. Locally: `RESET_IMAGE_IDS=12345678 node fetch-stats.js` with t
 civitai-reaction-stats/
 ├── .github/
 │   └── workflows/
-│       └── collect-stats.yml    # Hourly cron job
+│       ├── ci.yml               # Non-mutating tests on pushes and PRs
+│       └── collect-stats.yml    # Hourly cron + safe manual dry runs
+├── analysis/                    # Standalone posting-time study
 ├── scripts/
 │   ├── fetch-stats.js           # Main data fetcher
+│   ├── lib/                     # tRPC decoding and data validation
+│   ├── test-*.js                # Collector/codec safety tests
 │   └── package.json             # Node dependencies
 ├── extension/
 │   ├── manifest.json            # Extension manifest (MV3)
@@ -407,7 +415,7 @@ civitai-reaction-stats/
 │   ├── popup/                   # Settings popup
 │   ├── content/                 # Menu injection
 │   ├── stats-page/              # Charts and stats display
-│   ├── lib/                     # Bundled libraries (Chart.js)
+│   ├── lib/                     # Chart.js, snapshot codec, safe rendering
 │   └── icons/                   # Extension icons
 └── README.md
 ```
@@ -418,6 +426,14 @@ civitai-reaction-stats/
 2. Go to `chrome://extensions/`
 3. Click the refresh icon on the extension card
 4. Reload Civitai to test changes
+
+Before committing collector or dashboard changes:
+
+```bash
+cd scripts
+npm ci
+npm test
+```
 
 ### Testing the Fetch Script Locally
 
@@ -451,16 +467,35 @@ GIST_ID=xxx GIST_TOKEN=xxx CIVITAI_USERNAME=xxx CIVITAI_API_KEY=xxx REFRESH_TIER
 - "Stats changed: X" and "Unchanged: Y"
 - Check your Gist to verify data was written correctly
 
+### Safe validation against the live dataset
+
+Manual workflow runs default to **dry-run enabled**. A dry run reads the existing
+Gist, performs discovery/refresh/merge/retention, validates that no existing
+image or post-title cache entry was dropped, uploads before/after JSON as a
+short-lived Actions artifact, and **does not update the Gist**. Disable dry-run
+only when you deliberately want the manual run to write.
+
+The Gist itself is a Git repository and retains revisions. See
+[ROLLBACK.md](./ROLLBACK.md) for data-backup and recovery procedures.
+
+The API authentication details and tRPC wire formats are documented in
+[CIVITAI_OAUTH_INTEGRATION_GUIDE.md](./CIVITAI_OAUTH_INTEGRATION_GUIDE.md).
+
 ## Privacy
 
-- This extension only reads data from your public Gist
-- No data is sent to any third-party servers
-- Your Civitai stats are fetched by GitHub Actions, not by the extension
-- The extension does not require any Civitai credentials
+- The current Gist-based mode stores data in a **public GitHub Gist**. It can
+  expose the configured username, image ids and URLs, timestamps, reaction
+  history, base models, cached post titles, and prompt-derived names when Civitai
+  supplies them.
+- The extension reads that Gist and opens Civitai links; it does not send the
+  dataset to an additional analytics service.
+- Civitai credentials stay in GitHub Actions secrets and are not available to
+  the extension.
+- Local custom names remain in `chrome.storage.local` on that browser.
 
 ## License
 
-MIT License - see LICENSE file for details.
+MIT License — see [LICENSE](./LICENSE).
 
 ## Contributing
 

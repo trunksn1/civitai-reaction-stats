@@ -23,6 +23,14 @@ on:
         description: 'Max post titles to resolve this run (blank = 300). Raise for a one-off backfill.'
         required: false
         default: ''
+      dry-run:
+        description: 'Validate and export before/after datasets without updating the Gist'
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
 
 # A slow run (e.g. quarterly refresh) must never overlap the next hourly run:
 # both would read the gist, then last-write-wins would silently drop a snapshot.
@@ -48,7 +56,7 @@ jobs:
       - name: Install dependencies
         run: cd scripts && npm ci
 
-      - name: Run codec tests
+      - name: Run collector safety tests
         run: cd scripts && npm test
 
       - name: Fetch and update stats
@@ -63,3 +71,16 @@ jobs:
           RESET_IMAGE_IDS: ${{ github.event.inputs.reset-image-ids || '' }}
           # Blank is fine — the collector falls back to its own default (300).
           POST_TITLE_BUDGET: ${{ github.event.inputs.post-title-budget || '' }}
+          # Manual dispatches default to read-only. Scheduled runs keep writing
+          # only after every integrity/transition check passes.
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run || false }}
+          SAFETY_EXPORT_DIR: ${{ runner.temp }}/civitai-stats-safety
+
+      - name: Upload dry-run safety datasets
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.dry-run }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: civitai-stats-dry-run-${{ github.run_id }}
+          path: ${{ runner.temp }}/civitai-stats-safety/*.json
+          if-no-files-found: error
+          retention-days: 30

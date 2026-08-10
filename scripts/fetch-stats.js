@@ -1,8 +1,14 @@
 import { Octokit } from '@octokit/rest';
+import { createHash } from 'node:crypto';
+import { mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 // Shared snapshot codec — same file the extension loads (single source of truth
 // for the delta format). Lives under extension/lib/ because Chrome cannot load
 // files from outside the extension root.
 import SnapshotCodec from '../extension/lib/snapshot-codec.js';
+import { createTrpcHeaders, extractTrpcPayload } from './lib/trpc.js';
+import { assertSafeTransition, inspectStatsData } from './lib/stats-validation.js';
 
 const {
   isDelta,
@@ -21,6 +27,8 @@ const CIVITAI_API_KEY = process.env.CIVITAI_API_KEY; // Optional - may help get 
 const CIVITAI_RED_API_KEY = process.env.CIVITAI_RED_API_KEY || process.env.CIVITAI_API_KEY;
 const CIVITAI_RED_ENABLED = (process.env.CIVITAI_RED_ENABLED || 'true').toLowerCase() !== 'false';
 const REFRESH_TIER_OVERRIDE = process.env.REFRESH_TIER; // Optional: 'auto', 'daily', 'monthly', 'quarterly'
+const DRY_RUN = (process.env.DRY_RUN || '').toLowerCase() === 'true';
+const SAFETY_EXPORT_DIR = process.env.SAFETY_EXPORT_DIR || '';
 // Escape hatch for the never-decrease clamp: images listed here (comma-separated
 // IDs) take the API's fresh values as-is for this run, so an inflated stat that
 // got baked in by the clamp can be corrected. See README "Fixing inflated stats".
@@ -33,34 +41,13 @@ const FULL_DISCOVERY = (process.env.FULL_DISCOVERY || '').toLowerCase() === 'tru
 // How many post titles to resolve per run. Titles are used to give images a
 // human name in the extension; unresolved posts are retried on later runs, so
 // the initial backfill drains over a few runs instead of blowing one up.
-const POST_TITLE_BUDGET = Number(process.env.POST_TITLE_BUDGET || 300);
+const POST_TITLE_BUDGET = parseBoundedNumber(process.env.POST_TITLE_BUDGET, 300, 0, 10000);
+const REQUEST_TIMEOUT_MS = parseBoundedNumber(process.env.REQUEST_TIMEOUT_MS, 30000, 1000, 120000);
+const MAX_REFRESH_FAILURE_RATIO = parseBoundedNumber(
+  process.env.MAX_REFRESH_FAILURE_RATIO, 0.25, 0, 1
+);
 
-// Validate required environment variables
-if (!GIST_ID || !GIST_TOKEN || !CIVITAI_USERNAME) {
-  console.error('Missing required environment variables:');
-  if (!GIST_ID) console.error('  - GIST_ID');
-  if (!GIST_TOKEN) console.error('  - GIST_TOKEN');
-  if (!CIVITAI_USERNAME) console.error('  - CIVITAI_USERNAME');
-  process.exit(1);
-}
-
-if (CIVITAI_API_KEY) {
-  console.log('Using Civitai API key for authenticated requests');
-} else {
-  console.log('No CIVITAI_API_KEY set - using unauthenticated requests');
-}
-
-if (CIVITAI_RED_ENABLED) {
-  console.log(`civitai.red capture: enabled${process.env.CIVITAI_RED_API_KEY ? ' (dedicated key)' : ' (using .com key)'}`);
-} else {
-  console.log('civitai.red capture: disabled');
-}
-
-if (RESET_IMAGE_IDS.size > 0) {
-  console.log(`Clamp reset requested for ${RESET_IMAGE_IDS.size} image(s): ${[...RESET_IMAGE_IDS].join(', ')}`);
-}
-
-const octokit = new Octokit({ auth: GIST_TOKEN });
+let octokit = null;
 
 // Constants
 const CIVITAI_API_BASE = 'https://civitai.com/api/v1';
@@ -83,10 +70,55 @@ const STATS_BATCH_SIZE = 5; // Number of concurrent stats fetches
 const HOURLY_RETENTION_DAYS = 7;
 const SIX_HOUR_RETENTION_DAYS = 30;
 
+function parseBoundedNumber(value, fallback, min, max) {
+  if (value == null || value === '') return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
+    throw new Error(`Invalid numeric configuration "${value}"; expected ${min}..${max}`);
+  }
+  return parsed;
+}
+
+function validateRuntimeConfig() {
+  const missing = [];
+  if (!GIST_ID) missing.push('GIST_ID');
+  if (!GIST_TOKEN) missing.push('GIST_TOKEN');
+  if (!CIVITAI_USERNAME) missing.push('CIVITAI_USERNAME');
+  if (missing.length > 0) {
+    throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
+  }
+}
+
+function logRuntimeConfig() {
+  console.log(CIVITAI_API_KEY
+    ? 'Using Civitai API key for authenticated requests'
+    : 'No CIVITAI_API_KEY set - tRPC is skipped and core counters use REST fallback');
+  console.log(CIVITAI_RED_ENABLED
+    ? `civitai.red capture: enabled${process.env.CIVITAI_RED_API_KEY ? ' (dedicated key)' : ' (using .com key)'}`
+    : 'civitai.red capture: disabled');
+  if (RESET_IMAGE_IDS.size > 0) {
+    console.log(`Clamp reset requested for ${RESET_IMAGE_IDS.size} image(s): ${[...RESET_IMAGE_IDS].join(', ')}`);
+  }
+  if (DRY_RUN) console.log('DRY RUN: the collector will validate and export data but will not update the Gist');
+}
+
 /**
  * Fetch with exponential backoff retry
  */
-async function fetchWithRetry(url, retries = MAX_RETRIES, backoff = INITIAL_BACKOFF_MS) {
+function retryAfterDelayMs(value, fallback) {
+  if (!value) return fallback;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const dateDelay = Date.parse(value) - Date.now();
+  return Number.isFinite(dateDelay) ? Math.max(0, dateDelay) : fallback;
+}
+
+async function fetchWithRetry(
+  url,
+  retries = MAX_RETRIES,
+  backoff = INITIAL_BACKOFF_MS,
+  extraHeaders = {}
+) {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const headers = {};
@@ -96,12 +128,16 @@ async function fetchWithRetry(url, retries = MAX_RETRIES, backoff = INITIAL_BACK
       if (key) {
         headers['Authorization'] = `Bearer ${key}`;
       }
-      const response = await fetch(url, { headers });
+      Object.assign(headers, extraHeaders);
+      const response = await fetch(url, {
+        headers,
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+      });
 
       if (response.status === 429) {
         // Rate limited - wait and retry
         const retryAfter = response.headers.get('Retry-After');
-        const waitTime = retryAfter ? parseInt(retryAfter) * 1000 : backoff;
+        const waitTime = retryAfterDelayMs(retryAfter, backoff);
         console.log(`Rate limited. Waiting ${waitTime}ms before retry ${attempt}/${retries}`);
         await sleep(waitTime);
         backoff *= 2;
@@ -109,12 +145,15 @@ async function fetchWithRetry(url, retries = MAX_RETRIES, backoff = INITIAL_BACK
       }
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        const error = new Error(`HTTP ${response.status}: ${response.statusText}`);
+        error.status = response.status;
+        error.retryable = response.status === 408 || response.status >= 500;
+        throw error;
       }
 
       return await response.json();
     } catch (error) {
-      if (attempt === retries) {
+      if (attempt === retries || error.retryable === false) {
         throw error;
       }
       console.log(`Attempt ${attempt} failed: ${error.message}. Retrying in ${backoff}ms...`);
@@ -132,32 +171,75 @@ function sleep(ms) {
 }
 
 /**
- * Fetch stats for a single image by ID using the tRPC API.
- * The tRPC endpoint returns additional fields (buzz, collects, views)
- * that the public REST API does not expose.
+ * Fetch stats for a single image. Authenticated tRPC is preferred because it
+ * includes buzz/collects/views; REST is a safe fallback for the core counters.
  */
-async function fetchImageStats(imageId, host = 'com') {
+async function fetchImageStatsViaTrpc(imageId, host) {
   const input = { json: { id: Number(imageId) } };
   const url = `${siteOriginForHost(host)}/api/trpc/image.get?input=${encodeURIComponent(JSON.stringify(input))}`;
-  try {
-    const data = await fetchWithRetry(url);
-    const item = data?.result?.data?.json;
-    if (item && item.stats) {
-      const s = item.stats;
-      return {
-        likeCount: s.likeCountAllTime || 0,
-        heartCount: s.heartCountAllTime || 0,
-        laughCount: s.laughCountAllTime || 0,
-        cryCount: s.cryCountAllTime || 0,
-        commentCount: s.commentCountAllTime || 0,
-        buzzCount: s.tippedAmountCountAllTime || 0,
-        collectCount: s.collectedCountAllTime || 0,
-        viewCount: s.viewCountAllTime || 0
-      };
+  const key = host === 'red' ? CIVITAI_RED_API_KEY : CIVITAI_API_KEY;
+  const data = await fetchWithRetry(
+    url, MAX_RETRIES, INITIAL_BACKOFF_MS, createTrpcHeaders(siteOriginForHost(host), key)
+  );
+  const item = extractTrpcPayload(data);
+  if (!item?.stats) throw new Error('unexpected tRPC image.get response shape');
+  const s = item.stats;
+  return {
+    likeCount: s.likeCountAllTime || 0,
+    heartCount: s.heartCountAllTime || 0,
+    laughCount: s.laughCountAllTime || 0,
+    cryCount: s.cryCountAllTime || 0,
+    commentCount: s.commentCountAllTime || 0,
+    buzzCount: s.tippedAmountCountAllTime || 0,
+    collectCount: s.collectedCountAllTime || 0,
+    viewCount: s.viewCountAllTime || 0,
+    _source: 'trpc',
+    _host: host
+  };
+}
+
+async function fetchImageStatsViaRest(imageId, host) {
+  const url = `${apiBaseForHost(host)}/images?imageId=${encodeURIComponent(imageId)}`;
+  const data = await fetchWithRetry(url);
+  const item = data?.items?.[0];
+  if (!item?.stats) throw new Error('unexpected REST image response shape');
+  return {
+    likeCount: item.stats.likeCount || 0,
+    heartCount: item.stats.heartCount || 0,
+    laughCount: item.stats.laughCount || 0,
+    cryCount: item.stats.cryCount || 0,
+    commentCount: item.stats.commentCount || 0,
+    _source: 'rest',
+    _host: host
+  };
+}
+
+async function fetchImageStats(imageId, host = 'com') {
+  const key = host === 'red' ? CIVITAI_RED_API_KEY : CIVITAI_API_KEY;
+  const failures = [];
+
+  if (key) {
+    try {
+      return await fetchImageStatsViaTrpc(imageId, host);
+    } catch (error) {
+      failures.push(`tRPC ${host}: ${error.message}`);
     }
-  } catch (error) {
-    console.log(`  Warning: Failed to fetch stats for image ${imageId}: ${error.message}`);
   }
+
+  const restHosts = [host];
+  if (CIVITAI_RED_ENABLED) restHosts.push(host === 'red' ? 'com' : 'red');
+  for (let i = 0; i < restHosts.length; i++) {
+    const restHost = restHosts[i];
+    try {
+      return await fetchImageStatsViaRest(imageId, restHost);
+    } catch (error) {
+      failures.push(`REST ${restHost}: ${error.message}`);
+      // Only a 404 suggests the record may have moved to the other host.
+      if (error.status !== 404) break;
+    }
+  }
+
+  console.log(`  Warning: Failed to fetch stats for image ${imageId}: ${failures.join('; ')}`);
   return null;
 }
 
@@ -169,26 +251,21 @@ async function fetchImageStats(imageId, host = 'com') {
  *   2. Scraping the post page's embedded Next.js payload. ~110KB per post, so
  *      only used when tRPC is unavailable (it 401s for unauthenticated callers).
  *
- * Tri-state so a tRPC lockout costs one failed probe rather than one per post.
- * null = not yet probed, true/false = known.
+ * Availability is cached per host. A definitive auth/shape failure costs one
+ * probe; transient failures fall back for that post without disabling tRPC for
+ * the rest of the run.
  */
-let trpcPostGetAvailable = null;
+const trpcPostGetAvailability = new Map();
 
 async function fetchPostTitleViaTrpc(postId, host) {
   const input = { json: { id: Number(postId) } };
   const url = `${siteOriginForHost(host)}/api/trpc/post.get?input=${encodeURIComponent(JSON.stringify(input))}`;
-  const headers = {};
   const key = host === 'red' ? CIVITAI_RED_API_KEY : CIVITAI_API_KEY;
-  if (key) headers['Authorization'] = `Bearer ${key}`;
-
-  const response = await fetch(url, { headers });
-  if (!response.ok) {
-    const err = new Error(`HTTP ${response.status}`);
-    err.status = response.status;
-    throw err;
-  }
-  const data = await response.json();
-  const post = data?.result?.data?.json;
+  if (!key) throw new Error('no API key available for tRPC post.get');
+  const data = await fetchWithRetry(
+    url, MAX_RETRIES, INITIAL_BACKOFF_MS, createTrpcHeaders(siteOriginForHost(host), key)
+  );
+  const post = extractTrpcPayload(data);
   if (!post) throw new Error('unexpected tRPC response shape');
   // A post with no title yields null — a valid, cacheable answer, not a failure.
   return typeof post.title === 'string' && post.title.trim() ? post.title.trim() : null;
@@ -225,7 +302,8 @@ function extractPostTitleFromHtml(html, postId) {
 
 async function fetchPostTitleViaHtml(postId, host) {
   const response = await fetch(`${siteOriginForHost(host)}/posts/${postId}`, {
-    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; civitai-reaction-stats)' }
+    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; civitai-reaction-stats)' },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
   });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const result = extractPostTitleFromHtml(await response.text(), postId);
@@ -239,18 +317,24 @@ async function fetchPostTitleViaHtml(postId, host) {
  * distinguishes the two so "untitled" gets cached and "failed" gets retried.
  */
 async function fetchPostTitle(postId, host = 'com') {
-  if (trpcPostGetAvailable !== false) {
+  const key = host === 'red' ? CIVITAI_RED_API_KEY : CIVITAI_API_KEY;
+  const availability = trpcPostGetAvailability.get(host);
+  if (key && availability !== false) {
     try {
       const title = await fetchPostTitleViaTrpc(postId, host);
-      if (trpcPostGetAvailable === null) {
-        trpcPostGetAvailable = true;
-        console.log('  Post titles: using tRPC post.get');
+      if (availability == null) {
+        trpcPostGetAvailability.set(host, true);
+        console.log(`  Post titles (${host}): using tRPC post.get`);
       }
       return { title };
     } catch (error) {
-      if (trpcPostGetAvailable === null) {
-        trpcPostGetAvailable = false;
-        console.log(`  Post titles: tRPC post.get unavailable (${error.message}) — falling back to page scraping`);
+      const definitive = [401, 403, 404].includes(error.status) ||
+        error.message.includes('unexpected tRPC');
+      if (definitive) {
+        trpcPostGetAvailability.set(host, false);
+        console.log(`  Post titles (${host}): tRPC unavailable (${error.message}) — using page scraping`);
+      } else {
+        console.log(`  Post titles (${host}): transient tRPC failure (${error.message}) — scraping this post`);
       }
       // fall through to the HTML path
     }
@@ -322,7 +406,7 @@ async function refreshPostTitles(images, existingPostTitles, tier) {
 
     // Page scraping is ~110KB a pop; pace it. tRPC is cheap enough to go faster.
     if (i < budgeted.length - 1) {
-      await sleep(trpcPostGetAvailable ? 150 : 500);
+      await sleep(trpcPostGetAvailability.get(host) === true ? 150 : 500);
     }
   }
 
@@ -339,17 +423,17 @@ async function refreshPostTitles(images, existingPostTitles, tier) {
  * - Monthly (1st of month): also images from 1-6 months ago
  * - Quarterly (1st of month in Jan/Apr/Jul/Oct): ALL images
  */
-function getRefreshTier() {
-  // Check for manual override from workflow_dispatch input
-  if (REFRESH_TIER_OVERRIDE && REFRESH_TIER_OVERRIDE !== 'auto') {
-    console.log(`Using manual refresh tier override: ${REFRESH_TIER_OVERRIDE}`);
-    return REFRESH_TIER_OVERRIDE;
+function determineRefreshTier(now = new Date(), override = null) {
+  if (override && override !== 'auto') {
+    if (!['daily', 'monthly', 'quarterly'].includes(override)) {
+      throw new Error(`Invalid refresh tier override: ${override}`);
+    }
+    return override;
   }
 
   // Auto: determine tier based on date (UTC — matches the Actions cron).
   // Escalated tiers fire only at hour 0: the job runs hourly and would
   // otherwise repeat the expensive full refresh 24 times on tier days.
-  const now = new Date();
   const dayOfMonth = now.getUTCDate();
   const month = now.getUTCMonth(); // 0-indexed
   const hour = now.getUTCHours();
@@ -361,6 +445,14 @@ function getRefreshTier() {
     return 'monthly';
   }
   return 'daily';
+}
+
+function getRefreshTier() {
+  const tier = determineRefreshTier(new Date(), REFRESH_TIER_OVERRIDE);
+  if (REFRESH_TIER_OVERRIDE && REFRESH_TIER_OVERRIDE !== 'auto') {
+    console.log(`Using manual refresh tier override: ${tier}`);
+  }
+  return tier;
 }
 
 /**
@@ -419,6 +511,9 @@ async function refreshImageStats(images, tier) {
 
   let updated = 0;
   let unchanged = 0;
+  let failed = 0;
+  let trpcSuccesses = 0;
+  let restFallbacks = 0;
 
   // Process in batches to avoid overwhelming the API
   for (let i = 0; i < refreshList.length; i += STATS_BATCH_SIZE) {
@@ -431,19 +526,32 @@ async function refreshImageStats(images, tier) {
     for (let j = 0; j < batch.length; j++) {
       const stats = results[j];
       if (stats) {
+        const resetRequested = RESET_IMAGE_IDS.has(String(batch[j].id));
+        if (resetRequested && stats._source !== 'trpc') {
+          throw new Error(
+            `Clamp reset for image ${batch[j].id} requires a complete tRPC response; ` +
+            `refusing partial ${stats._source || 'unknown'} data`
+          );
+        }
+        if (stats._source === 'trpc') trpcSuccesses++;
+        if (stats._source === 'rest') restFallbacks++;
+        if (stats._host) batch[j].host = stats._host;
+        const cleanStats = { ...stats };
+        delete cleanStats._source;
+        delete cleanStats._host;
         const bulkStats = batch[j].stats || {};
         // Keep the higher value for each field — individual refresh should
         // correct understated bulk stats, not overwrite with stale/lower values.
         // Exception: a requested clamp reset trusts the fresh fetch as-is.
-        const mergedStats = RESET_IMAGE_IDS.has(String(batch[j].id)) ? { ...stats } : {
-          likeCount: Math.max(stats.likeCount || 0, bulkStats.likeCount || 0),
-          heartCount: Math.max(stats.heartCount || 0, bulkStats.heartCount || 0),
-          laughCount: Math.max(stats.laughCount || 0, bulkStats.laughCount || 0),
-          cryCount: Math.max(stats.cryCount || 0, bulkStats.cryCount || 0),
-          commentCount: Math.max(stats.commentCount || 0, bulkStats.commentCount || 0),
-          buzzCount: Math.max(stats.buzzCount || 0, bulkStats.buzzCount || 0),
-          collectCount: Math.max(stats.collectCount || 0, bulkStats.collectCount || 0),
-          viewCount: Math.max(stats.viewCount || 0, bulkStats.viewCount || 0),
+        const mergedStats = resetRequested ? cleanStats : {
+          likeCount: Math.max(cleanStats.likeCount || 0, bulkStats.likeCount || 0),
+          heartCount: Math.max(cleanStats.heartCount || 0, bulkStats.heartCount || 0),
+          laughCount: Math.max(cleanStats.laughCount || 0, bulkStats.laughCount || 0),
+          cryCount: Math.max(cleanStats.cryCount || 0, bulkStats.cryCount || 0),
+          commentCount: Math.max(cleanStats.commentCount || 0, bulkStats.commentCount || 0),
+          buzzCount: Math.max(cleanStats.buzzCount || 0, bulkStats.buzzCount || 0),
+          collectCount: Math.max(cleanStats.collectCount || 0, bulkStats.collectCount || 0),
+          viewCount: Math.max(cleanStats.viewCount || 0, bulkStats.viewCount || 0),
         };
         const oldTotal = (bulkStats.likeCount || 0) + (bulkStats.heartCount || 0) +
                          (bulkStats.laughCount || 0) + (bulkStats.cryCount || 0);
@@ -461,6 +569,7 @@ async function refreshImageStats(images, tier) {
           unchanged++;
         }
       } else {
+        failed++;
         unchanged++;
       }
     }
@@ -480,6 +589,20 @@ async function refreshImageStats(images, tier) {
   console.log(`\nIndividual stats refresh complete:`);
   console.log(`  Stats changed: ${updated}`);
   console.log(`  Unchanged: ${unchanged}`);
+  console.log(`  Sources: ${trpcSuccesses} tRPC, ${restFallbacks} REST fallback, ${failed} failed`);
+
+  // A few deleted/migrating images are normal. A broad tRPC fallback or fetch
+  // failure is not: extended counters would silently freeze while the workflow
+  // still looked green. Abort before building or writing a candidate dataset.
+  const degraded = failed + (CIVITAI_API_KEY ? restFallbacks : 0);
+  const degradedRatio = degraded / refreshList.length;
+  if (refreshList.length >= 10 && degradedRatio > MAX_REFRESH_FAILURE_RATIO) {
+    throw new Error(
+      `Individual refresh health check failed: ${degraded}/${refreshList.length} ` +
+      `(${(degradedRatio * 100).toFixed(1)}%) failed or fell back; limit is ` +
+      `${(MAX_REFRESH_FAILURE_RATIO * 100).toFixed(1)}%`
+    );
+  }
 
   return images;
 }
@@ -698,10 +821,9 @@ async function readGistData() {
 
     // Check if stats.json file exists
     if (!gist.data.files['stats.json']) {
-      console.log('Warning: stats.json file not found in Gist');
-      console.log('Available files:', Object.keys(gist.data.files).join(', '));
-      console.log('Starting with empty stats');
-      return createEmptyStats();
+      throw new Error(
+        `stats.json not found in Gist. Available files: ${Object.keys(gist.data.files).join(', ') || '(none)'}`
+      );
     }
 
     const fileData = gist.data.files['stats.json'];
@@ -737,6 +859,8 @@ async function readGistData() {
     }
 
     console.log(`Successfully read existing data: ${data.totalSnapshots.length} totalSnapshots, ${data.images.length} images`);
+    const summary = inspectStatsData(data);
+    console.log(`Validated existing data: ${summary.imageSnapshots} image snapshots, ${summary.postTitles} post titles`);
     return data;
 
   } catch (error) {
@@ -780,6 +904,17 @@ function createEmptyStats() {
   };
 }
 
+async function exportSafetyArtifact(name, data) {
+  if (!SAFETY_EXPORT_DIR) return null;
+  await mkdir(SAFETY_EXPORT_DIR, { recursive: true });
+  const content = JSON.stringify(data);
+  const filePath = path.join(SAFETY_EXPORT_DIR, `${name}.json`);
+  await writeFile(filePath, content, 'utf8');
+  const sha256 = createHash('sha256').update(content).digest('hex');
+  console.log(`Safety export: ${filePath} (${(content.length / 1024).toFixed(2)} KB, sha256 ${sha256})`);
+  return { filePath, sha256, bytes: Buffer.byteLength(content) };
+}
+
 /**
  * Update Gist with new data
  */
@@ -793,6 +928,11 @@ async function updateGist(data) {
     console.log(`  Data size: ${(content.length / 1024).toFixed(2)} KB`);
     console.log(`  Total snapshots: ${data.totalSnapshots.length}`);
     console.log(`  Images: ${data.images.length}`);
+
+    if (DRY_RUN) {
+      console.log('DRY RUN: Gist update skipped');
+      return;
+    }
 
     await octokit.gists.update({
       gist_id: GIST_ID,
@@ -861,8 +1001,7 @@ function aggregateSnapshots(snapshots, intervalHours) {
 /**
  * Apply data retention policy to snapshots
  */
-function applyRetentionPolicy(snapshots) {
-  const now = Date.now();
+function applyRetentionPolicy(snapshots, now = Date.now()) {
   const hourlyThreshold = now - (HOURLY_RETENTION_DAYS * 24 * 60 * 60 * 1000);
   const sixHourThreshold = now - (SIX_HOUR_RETENTION_DAYS * 24 * 60 * 60 * 1000);
 
@@ -939,6 +1078,8 @@ function processImages(apiImages, existingImages = []) {
     // Get existing image data if available
     const existingImage = existingImageMap.get(String(img.id));
     let snapshots = existingImage?.snapshots || [];
+    const storedSnapshotCount = snapshots.length;
+    let addedForImage = 0;
 
     // Determine previous absolute values (resolve last snapshot if it's a delta)
     const lastSnapshot = snapshots.length > 0
@@ -991,6 +1132,7 @@ function processImages(apiImages, existingImages = []) {
         // First snapshot — store absolute
         snapshots.push({ timestamp, likes, hearts, laughs, cries, comments, buzz, collects, views });
         snapshotsAdded++;
+        addedForImage++;
       } else {
         // Subsequent snapshot — store as delta
         const delta = { timestamp };
@@ -1005,6 +1147,7 @@ function processImages(apiImages, existingImages = []) {
         if (Object.keys(delta).length > 1) {
           snapshots.push(delta);
           snapshotsAdded++;
+          addedForImage++;
         }
       }
     }
@@ -1013,8 +1156,16 @@ function processImages(apiImages, existingImages = []) {
     let resolvedSnapshots = resolveAllSnapshots(snapshots);
     const beforeRetention = resolvedSnapshots.length;
     resolvedSnapshots = applyRetentionPolicy(resolvedSnapshots);
-    retentionRemoved += beforeRetention - resolvedSnapshots.length;
+    const removedForImage = beforeRetention - resolvedSnapshots.length;
+    retentionRemoved += removedForImage;
     snapshots = encodeAsDeltas(resolvedSnapshots);
+    const expectedForImage = storedSnapshotCount + addedForImage - removedForImage;
+    if (snapshots.length !== expectedForImage) {
+      throw new Error(
+        `Image ${img.id} snapshot accounting failed: ${storedSnapshotCount} stored + ` +
+        `${addedForImage} added - ${removedForImage} retained-away != ${snapshots.length} candidate`
+      );
+    }
 
     const host = img.host || 'com';
     return {
@@ -1107,19 +1258,25 @@ function processImages(apiImages, existingImages = []) {
  * Main execution
  */
 async function main() {
-  console.log('=== Civitai Stats Collector ===');
-  console.log(`Time: ${new Date().toISOString()}`);
-  console.log(`Username: ${CIVITAI_USERNAME}`);
-  console.log('');
-  if (REFRESH_TIER_OVERRIDE && REFRESH_TIER_OVERRIDE !== 'auto') {
-    console.log(`Refresh tier override: ${REFRESH_TIER_OVERRIDE} (manually triggered)`);
-  }
-  console.log('');
-
   try {
+    validateRuntimeConfig();
+    octokit = new Octokit({ auth: GIST_TOKEN });
+
+    console.log('=== Civitai Stats Collector ===');
+    console.log(`Time: ${new Date().toISOString()}`);
+    console.log(`Username: ${CIVITAI_USERNAME}`);
+    logRuntimeConfig();
+    if (REFRESH_TIER_OVERRIDE && REFRESH_TIER_OVERRIDE !== 'auto') {
+      console.log(`Refresh tier override: ${REFRESH_TIER_OVERRIDE} (manually triggered)`);
+    }
+    console.log('');
+
     // Read existing Gist data FIRST: fail fast on gist problems before touching
     // the Civitai API, and feed known image IDs into incremental discovery.
     const existingData = await readGistData();
+    const originalData = structuredClone(existingData);
+    inspectStatsData(originalData);
+    await exportSafetyArtifact('stats-before', originalData);
 
     // Fetch all user images from Civitai
     const apiImages = await fetchAllUserImages(CIVITAI_USERNAME, existingData.images);
@@ -1279,6 +1436,13 @@ async function main() {
     }
     console.log('✓ Data integrity check: PASSED');
 
+    const transition = assertSafeTransition(originalData, existingData);
+    console.log('Candidate transition check:');
+    console.log(`  Images: ${transition.before.images} -> ${transition.after.images}`);
+    console.log(`  Post titles: ${transition.before.postTitles} -> ${transition.after.postTitles}`);
+    console.log('✓ Candidate transition check: PASSED');
+    await exportSafetyArtifact('stats-candidate', existingData);
+
     // Update Gist
     await updateGist(existingData);
 
@@ -1289,4 +1453,15 @@ async function main() {
   }
 }
 
-main();
+const isDirectRun = process.argv[1] &&
+  import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+
+if (isDirectRun) main();
+
+export {
+  aggregateSnapshots,
+  applyRetentionPolicy,
+  determineRefreshTier,
+  extractPostTitleFromHtml,
+  retryAfterDelayMs
+};

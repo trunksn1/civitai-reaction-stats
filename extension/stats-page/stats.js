@@ -38,6 +38,11 @@ let postIndex = new Map();
 let displayedImages = 10;
 const IMAGES_PER_PAGE = 10;
 
+// Values in the Gist and post-title cache are external input. Keep text and
+// URL handling centralized and tested before interpolating them into templates.
+const escapeHtml = SafeValues.escapeHtml;
+const safeCivitaiUrl = SafeValues.safeCivitaiUrl;
+
 // Time ranges (ms) and delta-bucket sizes (ms) per range. Buckets are fixed
 // calendar intervals so "gained per period" bars are comparable — snapshots
 // are change-only and therefore irregularly spaced.
@@ -645,9 +650,9 @@ function renderTopMovers() {
     const pct = Math.round((totalGain / maxGain) * 100);
     const name = escapeHtml(displayName(image));
     const thumb = image.thumbnailUrl
-      ? `<img src="${escapeHtml(image.thumbnailUrl)}" alt="" loading="lazy">`
+      ? `<img src="${escapeHtml(safeCivitaiUrl(image.thumbnailUrl, ''))}" alt="" loading="lazy">`
       : '<div class="placeholder">\u{1F5BC}️</div>';
-    const href = image.url ? escapeHtml(image.url) : '#';
+    const href = escapeHtml(safeCivitaiUrl(image.url));
     return `
       <a class="mover-row" href="${href}" target="_blank" rel="noopener">
         <div class="mover-thumb">${thumb}</div>
@@ -785,10 +790,10 @@ function renderHallOfFame() {
       ? `${formatNumber(best.stats[cat.key] || 0)} buzz`
       : `${Math.round(bestScore * 100)}% ${cat.key}`;
     const thumb = img.thumbnailUrl
-      ? `<img src="${escapeHtml(img.thumbnailUrl)}" alt="" loading="lazy">`
+      ? `<img src="${escapeHtml(safeCivitaiUrl(img.thumbnailUrl, ''))}" alt="" loading="lazy">`
       : '<div class="placeholder">\u{1F5BC}️</div>';
     rows.push(`
-      <a class="mover-row" href="${escapeHtml(img.url || '#')}" target="_blank" rel="noopener">
+      <a class="mover-row" href="${escapeHtml(safeCivitaiUrl(img.url))}" target="_blank" rel="noopener">
         <div class="mover-thumb">${thumb}</div>
         <div class="mover-info">
           <div class="mover-name">${cat.emoji} ${cat.title}</div>
@@ -835,10 +840,10 @@ function renderOnThisDay() {
 
   container.innerHTML = matches.map(({ image, stats, years }) => {
     const thumb = image.thumbnailUrl
-      ? `<img src="${escapeHtml(image.thumbnailUrl)}" alt="" loading="lazy">`
+      ? `<img src="${escapeHtml(safeCivitaiUrl(image.thumbnailUrl, ''))}" alt="" loading="lazy">`
       : '<div class="placeholder">\u{1F5BC}️</div>';
     return `
-      <a class="mover-row" href="${escapeHtml(image.url || '#')}" target="_blank" rel="noopener">
+      <a class="mover-row" href="${escapeHtml(safeCivitaiUrl(image.url))}" target="_blank" rel="noopener">
         <div class="mover-thumb">${thumb}</div>
         <div class="mover-info">
           <div class="mover-name">${escapeHtml(displayName(image))}</div>
@@ -2196,12 +2201,12 @@ function renderPeriodSummary() {
   const topImagesHtml = top5.map(item => {
     const img = item.image;
     const thumb = img.thumbnailUrl
-      ? `<img src="${escapeHtml(img.thumbnailUrl)}" alt="" loading="lazy">`
+      ? `<img src="${escapeHtml(safeCivitaiUrl(img.thumbnailUrl, ''))}" alt="" loading="lazy">`
       : '<div class="placeholder">?</div>';
     const name = escapeHtml(displayName(img));
     const gainValue = sortType === 'total' ? item.totalGain : (item.gains[sortType] || 0);
     return `
-      <a class="period-top-image" href="${escapeHtml(img.url)}" target="_blank" rel="noopener">
+      <a class="period-top-image" href="${escapeHtml(safeCivitaiUrl(img.url))}" target="_blank" rel="noopener">
         <div class="period-top-thumb">${thumb}</div>
         <div class="period-top-info">
           <span class="period-top-name" title="${name}">${name}</span>
@@ -2259,13 +2264,13 @@ function createImageCard(image) {
       <div class="image-card-header">
         <div class="image-thumbnail">
           ${image.thumbnailUrl
-            ? `<img src="${escapeHtml(image.thumbnailUrl)}" alt="" loading="lazy">`
+            ? `<img src="${escapeHtml(safeCivitaiUrl(image.thumbnailUrl, ''))}" alt="" loading="lazy">`
             : '<div class="placeholder">?</div>'
           }
         </div>
         <div class="image-info">
           <div class="image-name">
-            <a href="${escapeHtml(image.url)}" target="_blank" rel="noopener" title="${escapeHtml(nameTooltip(image))}">
+            <a href="${escapeHtml(safeCivitaiUrl(image.url))}" target="_blank" rel="noopener" title="${escapeHtml(nameTooltip(image))}">
               ${escapeHtml(displayName(image))}
             </a>
             <button class="image-rename-btn" data-image-id="${escapeHtml(image.id)}" title="Rename (display only — stored locally)">&#x270F;&#xFE0F;</button>
@@ -2407,16 +2412,6 @@ function formatChartDate(date, timeRange) {
       const year = date.getFullYear().toString().slice(-2);
       return date.toLocaleDateString('en-US', { month: 'short' }) + " '" + year;
   }
-}
-
-/**
- * Escape HTML to prevent XSS
- */
-function escapeHtml(str) {
-  if (!str) return '';
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
 }
 
 /**

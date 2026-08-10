@@ -47,7 +47,7 @@ All in `scripts/fetch-stats.js` unless noted.
 |---|------|--------|------|
 | 3.1 | ✅ Incremental discovery | Pass known image IDs (from existing gist data) into `fetchUserImagesFromHost`; stop paginating a level when a full page contains only known IDs. Force full sweep when tier ≠ daily or `FULL_DISCOVERY=true`. | M |
 | 3.2 | ✅ Discovery telemetry | Log pages fetched per level/host before vs after (validates 3.1). | S |
-| 3.3 | (Optional) positional snapshot arrays | `[t, dl, dh, dla, dc, dco, dbu, dcol, dvi]` in stored JSON via the codec. Only if gist size is still a concern after 1.4; requires codec versioning (`formatVersion` field, read both). | L |
+| 3.3 | Versioned storage v2 | Gist size is now a measured concern: the deployed pretty JSON exceeded the inline API threshold, and compact branch output reached ~973 KB. Add `formatVersion`, read both formats, and use positional snapshot arrays or split history files. Preserve a verified pre-migration Gist clone and dry-run the conversion before writing. | L |
 
 ## Phase 4 — Chart correctness (extension)
 
@@ -77,11 +77,12 @@ histories (union by timestamp — safe because snapshots are cumulative).
 
 | # | Task | Detail | Size |
 |---|------|--------|------|
+| 5.0 | Authentication and endpoint probe | Before architecture work, test Chrome-extension PKCE, cookie behavior, `.com`/`.red`, `image.getInfinite`, `image.get`, `image.getGenerationData`, and refresh-token rotation. OAuth works on tRPC but not REST v1; decode both tRPC wire formats. Record a credential/endpoint matrix and fail loudly on plausible empty results. | M |
 | 5.1 | Storage layer | IndexedDB wrapper in the service worker (`extension/lib/db.js`): same logical schema as the gist JSON (meta, totalSnapshots, per-image snapshots). Add `unlimitedStorage` permission. | M |
-| 5.2 | Port collector into service worker | New `extension/collector.js` reusing the codec + tier logic: discovery (incremental, both hosts), per-image tRPC refresh, clamping, retention. Fetches run with the user's cookies — no API key needed. Rate limits: keep batch=5 / 300ms. | L |
+| 5.2 | Port collector into service worker | New `extension/collector.js` reusing the codec + tier logic: discovery (incremental, both hosts), per-image tRPC refresh, clamping, retention. Use the credential/endpoint strategy proven in 5.0—prefer OAuth for tRPC, use an API key only where REST v1 remains necessary, and rely on cookies only if the extension-origin probe proves it robust. Rate limits: keep batch=5 / 300ms. | L |
 | 5.3 | Scheduling | `chrome.alarms.create('collect', {periodInMinutes: 45})`; on fire, skip if last successful run < 30 min ago; catch-up run on browser startup. MV3 note: each alarm wakes the SW fresh — collector must checkpoint progress (per-phase) to survive SW termination on long runs. | M |
 | 5.4 | Data-source abstraction | `stats.js` reads via one interface with two providers: `local` (IndexedDB) and `gist` (current behavior). Popup gets a source selector: "Collect locally (default)" / "Read from Gist URL". | M |
-| 5.5 | Onboarding | First-run: detect logged-in username via Civitai session (`/api/trpc` me query or parse from page), confirm in popup, start first collection with progress UI. | M |
+| 5.5 | Onboarding | First-run OAuth Authorization Code + PKCE with the smallest scope proven in 5.0; identify the user through `/userinfo`, confirm in popup, and start first collection with progress UI. Persist rotating refresh tokens safely and serialize refreshes. | M |
 | 5.6 | Import/export | Export local DB as `stats.json` (same schema — the collector's format is the interchange format); import an existing gist file to keep history when migrating from the Actions setup. | M |
 | 5.7 | Web Store packaging | Icons/screenshots, privacy policy (all data local; nothing leaves the browser in local mode — also fixes the public-prompt privacy issue), zip pipeline, submit. | M |
 | 5.8 | Docs rewrite | README: "Install extension" as the primary path; GitHub Actions + gist demoted to an optional "24/7 collection" appendix for power users. | M |
@@ -96,7 +97,7 @@ Ordered by delight-per-effort; each is an independent widget on the Overview tab
 | # | Feature | Data source | Size |
 |---|---------|-------------|------|
 | 6.1 | Calendar heatmap (GitHub-style, reactions gained/day, 12 months) | existing total snapshots | M |
-| 6.2 | Best time to post — DoW × hour heatmap of reaction inflow; port aggregation approach from the old `analysis/` script but feed it per-user snapshot deltas | existing snapshots | M |
+| 6.2 | Split timing views: (a) audience-activity DoW × hour heatmap from reaction inflow; (b) true personal “best time to post” using publish time versus age-normalized image outcome/velocity with sample-size warnings. The former must not be labeled as evidence for the latter. | existing snapshots + `createdAt` | M |
 | 6.3 | Records & milestones — best day, gaining streak, next round-number milestone with linear-projection ETA | existing | M |
 | 6.4 | ✅ Distribution histogram + "top N images = X% of reactions" | existing | S |
 | 6.5 | Week-vs-last-week sparklines on summary cards | existing | S |
@@ -104,7 +105,7 @@ Ordered by delight-per-effort; each is an independent widget on the Overview tab
 | 6.7 | ✅ Reaction personality (funniest / most loved / most tipped) | existing | S |
 | 6.8 | ✅ "On this day" (posted a year ago + earned since) | existing | S |
 | 6.9 | Monthly recap card exported as PNG (canvas-rendered, Wrapped-style) | existing | L |
-| 6.10 | Prompt/keyword performance correlation — requires keeping more of `meta.prompt` (or a keyword set) at collection time | collector change + UI | L |
+| 6.10 | Prompt/keyword performance correlation — conditionally unblocked by OAuth tRPC `image.getGenerationData`; store only an opt-in local keyword representation, not raw prompts in the public Gist | Phase 5 OAuth + local storage + UI | L |
 
 ## Phase 7 — Real image names (post titles, write-back)
 
@@ -249,7 +250,11 @@ so the part number is never what gets truncated away.
 Removed 2026-07-29: 7.1 proved there is no filename to capture. Intentionally left as a
 numbered stub so 7.6/7.7 references in older notes still line up.
 
-### 7.6 ✅ Rename UI: local name vs. post title **[M]**
+### 7.6 🟡 Rename UI: local name vs. post title **[M]**
+
+**Current state:** local per-image/per-post naming and derived `pt. N` storage are done.
+The “also set the post title on Civitai” control remains dependent on 7.7 and must not
+be treated as shipped yet.
 
 Extend the existing inline editor (`startRename`, `stats.js:1446`). Two independent things
 happen on save, and the dialog must keep them visually separate:
@@ -280,7 +285,11 @@ Flow:
 
 Mutating the user's live account. Requirements:
 
-- **Same-origin execution.** The stats page is a `chrome-extension://` origin; Civitai's
+- **Probe OAuth `post.update` first.** The verified Media & Posts Write scope works for
+  tRPC creation; capture and test the exact update mutation with a throwaway title. If
+  OAuth works, prefer it over cookie relay and request only the minimal scope.
+- **Same-origin fallback.** If OAuth cannot update, the stats page is a
+  `chrome-extension://` origin; Civitai's
   session cookie will not ride a cross-site POST under `SameSite=Lax`. So route it:
   stats page → `chrome.runtime` message → service worker → content script on an open
   `civitai.com` tab → same-origin `fetch('/api/trpc/post.update', …)` with
@@ -299,9 +308,10 @@ Mutating the user's live account. Requirements:
 
 ### 7.8 ✅ Docs **[S]**
 
-Fold the 7.0 findings into `memory/civitai-api-reference.md` (filename absence, the
-`__NEXT_DATA__` title route, the tRPC 401) and note in `README.md` that names come from
-post titles with a local-override layer.
+Keep the 7.0 findings in this plan and the checked-in
+`CIVITAI_OAUTH_INTEGRATION_GUIDE.md` (filename absence, title routes, auth behavior,
+and tRPC wire formats), and note in `README.md` that names come from post titles with
+a local-override layer.
 
 ### Suggested order
 
@@ -394,8 +404,9 @@ tRPC mutations work.
 
 ### Unresolved / needs a decision
 
-1. Gist size: `postTitles` adds roughly one short entry per post (~6.5k entries). Small
-   next to the snapshot arrays, but worth measuring against the 1 MB truncation threshold.
+1. Gist size is **measured and active**, not hypothetical. A deployed run wrote ~1.44 MB
+   pretty JSON and used the `raw_url` truncation fallback; compact branch output was
+   ~973 KB. Complete 3.3 before growth makes every extension load unnecessarily heavy.
 2. Should a local rename that was *not* pushed still be exported/synced across devices?
    Currently `chrome.storage.local` is per-device by design.
 3. When the user later edits a post title on Civitai directly, the cached `postTitles`
@@ -424,6 +435,10 @@ Phase 7 (names) — needs only 7.1's answer to start; independent of 2–6.
 2. **Firefox?** MV3 + alarms work there too with minor manifest tweaks — in scope or later?
 3. **History migration default** — when a gist-mode user switches to local mode, import
    automatically or on demand?
+
+4. **Phase 5 credential mix** — can tRPC-only OAuth cover discovery well enough to avoid
+   asking ordinary extension users for an API key, or is a limited REST/API-key path still
+   required? Settle with the 5.0 probe, not assumptions about browser cookies.
 
 ~~4. `analysis/` destination~~ — **resolved: it stays in this repo, untouched** (owner
 decision, 2026-07-28).
