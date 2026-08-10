@@ -1061,9 +1061,8 @@ function processImages(apiImages, existingImages = []) {
   let totalViews = 0;
 
   // Bookkeeping for the integrity check in main(): snapshots may only be
-  // added (new data point) or removed by retention — never lost in the merge.
+  // added (new data point), never removed from history.
   let snapshotsAdded = 0;
-  let retentionRemoved = 0;
 
   const images = apiImages.map(img => {
     const apiLikes = img.stats?.likeCount || 0;
@@ -1152,18 +1151,15 @@ function processImages(apiImages, existingImages = []) {
       }
     }
 
-    // Apply retention: resolve to absolute first, retain, then re-encode as deltas
-    let resolvedSnapshots = resolveAllSnapshots(snapshots);
-    const beforeRetention = resolvedSnapshots.length;
-    resolvedSnapshots = applyRetentionPolicy(resolvedSnapshots);
-    const removedForImage = beforeRetention - resolvedSnapshots.length;
-    retentionRemoved += removedForImage;
+    // Resolve and re-encode without downsampling. Every stored observation is
+    // part of the collected dataset and must survive an ordinary run.
+    const resolvedSnapshots = resolveAllSnapshots(snapshots);
     snapshots = encodeAsDeltas(resolvedSnapshots);
-    const expectedForImage = storedSnapshotCount + addedForImage - removedForImage;
+    const expectedForImage = storedSnapshotCount + addedForImage;
     if (snapshots.length !== expectedForImage) {
       throw new Error(
         `Image ${img.id} snapshot accounting failed: ${storedSnapshotCount} stored + ` +
-        `${addedForImage} added - ${removedForImage} retained-away != ${snapshots.length} candidate`
+        `${addedForImage} added != ${snapshots.length} candidate`
       );
     }
 
@@ -1251,7 +1247,7 @@ function processImages(apiImages, existingImages = []) {
     imageCount: images.length
   };
 
-  return { images, totalSnapshot, snapshotsAdded, retentionRemoved };
+  return { images, totalSnapshot, snapshotsAdded };
 }
 
 /**
@@ -1313,7 +1309,7 @@ async function main() {
       (sum, img) => sum + (img.snapshots?.length || 0), 0);
 
     // Process images with existing data to merge snapshots
-    const { images, totalSnapshot, snapshotsAdded, retentionRemoved } =
+    const { images, totalSnapshot, snapshotsAdded } =
       processImages(apiImages, existingData.images);
 
     console.log('\nSnapshot created:');
@@ -1364,8 +1360,7 @@ async function main() {
       existingData.totalSnapshots.push(totalSnapshot);
     }
 
-    // Apply retention: resolve to absolute, retain, re-encode as deltas
-    const snapshotsBefore = existingData.totalSnapshots.length;
+    // Resolve/re-encode totals without downsampling historical observations.
     let resolvedTotal = resolveAllSnapshots(existingData.totalSnapshots);
     // Preserve imageCount through resolve/encode cycle
     for (let i = 0; i < resolvedTotal.length; i++) {
@@ -1373,7 +1368,6 @@ async function main() {
         resolvedTotal[i].imageCount = existingData.totalSnapshots[i].imageCount;
       }
     }
-    resolvedTotal = applyRetentionPolicy(resolvedTotal);
     existingData.totalSnapshots = encodeAsDeltas(resolvedTotal);
     // Re-attach imageCount to encoded snapshots
     for (let i = 0; i < existingData.totalSnapshots.length; i++) {
@@ -1381,12 +1375,6 @@ async function main() {
         existingData.totalSnapshots[i].imageCount = resolvedTotal[i].imageCount;
       }
     }
-    const snapshotsAfter = existingData.totalSnapshots.length;
-
-    if (snapshotsBefore !== snapshotsAfter) {
-      console.log(`\nRetention policy (total): ${snapshotsBefore} -> ${snapshotsAfter} snapshots`);
-    }
-
     // Resolve post titles (best-effort — names are cosmetic, never worth
     // failing a stats run over).
     try {
@@ -1408,20 +1396,20 @@ async function main() {
     // floor means the merge dropped history — abort before overwriting.
     const postMergeSnapshotCount = images.reduce(
       (sum, img) => sum + (img.snapshots?.length || 0), 0);
-    const expectedSnapshotCount = preMergeSnapshotCount + snapshotsAdded - retentionRemoved;
+    const expectedSnapshotCount = preMergeSnapshotCount + snapshotsAdded;
 
     console.log('\nData integrity check:');
     console.log(`  Image snapshots before merge: ${preMergeSnapshotCount}`);
-    console.log(`  Added this run: ${snapshotsAdded}, removed by retention: ${retentionRemoved}`);
+    console.log(`  Added this run: ${snapshotsAdded}`);
     console.log(`  Image snapshots after merge: ${postMergeSnapshotCount} (expected: ${expectedSnapshotCount})`);
 
-    if (postMergeSnapshotCount < expectedSnapshotCount) {
+    if (postMergeSnapshotCount !== expectedSnapshotCount) {
       console.error('');
       console.error('═══════════════════════════════════════════════════════════');
       console.error('DATA LOSS DETECTED!');
       console.error('═══════════════════════════════════════════════════════════');
       console.error(`Expected: ${expectedSnapshotCount} image snapshots`);
-      console.error(`  (${preMergeSnapshotCount} before + ${snapshotsAdded} added - ${retentionRemoved} retention)`);
+      console.error(`  (${preMergeSnapshotCount} before + ${snapshotsAdded} added)`);
       console.error(`Actual: ${postMergeSnapshotCount}`);
       console.error('');
       console.error('This indicates a critical bug in data merging.');
@@ -1431,9 +1419,6 @@ async function main() {
       process.exit(1);
     }
 
-    if (postMergeSnapshotCount > expectedSnapshotCount) {
-      console.log(`  Note: ${postMergeSnapshotCount - expectedSnapshotCount} more snapshots than expected (harmless, but worth a look)`);
-    }
     console.log('✓ Data integrity check: PASSED');
 
     const transition = assertSafeTransition(originalData, existingData);

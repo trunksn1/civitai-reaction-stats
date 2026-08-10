@@ -21,7 +21,7 @@ GitHub Actions
   -> discover images on civitai.com and civitai.red
   -> refresh selected image counters
   -> merge without dropping historical images
-  -> retain/downsample and delta-encode snapshots
+  -> preserve and delta-encode snapshots
   -> validate the complete candidate transition
   -> update stats.json (unless dry-run)
 
@@ -197,15 +197,21 @@ host only after definitive failures. HTML parsing of `/posts/{id}` is the
 fallback; it locates the `__NEXT_DATA__` query whose `state.data.id` matches the
 post id rather than trusting an array position.
 
-### 7. Retention and encoding
+### 7. History preservation and encoding
 
-Both aggregate and per-image histories use:
+Scheduled runs preserve every previously stored aggregate and per-image
+observation. The legacy downsampling helper is retained for tests and possible
+offline migration tooling, but the collector does not call it. Its historical
+policy was:
 
 | Age | Resolution |
 |---|---|
 | 0-7 days | all collected points |
 | 7-30 days | last point per six-hour bucket |
 | over 30 days | last point per UTC-aligned daily bucket |
+
+Any future compaction belongs in a versioned, backup-first storage migration;
+it must not occur as a side effect of an ordinary collection run.
 
 `extension/lib/snapshot-codec.js` is loaded by both the Node collector and the
 extension. The first point is absolute. Later points use short delta keys such
@@ -215,10 +221,11 @@ as `dl`, `dh`, and `dco`; `_d: 1` marks a zero-change delta.
 
 Before any write, the collector verifies:
 
-- exact per-image snapshot accounting after additions and retention removals;
+- exact per-image snapshot accounting after additions;
 - valid and unique image ids;
 - valid timestamps and finite non-negative resolved counters;
 - every pre-existing image id is still present;
+- every historical image and aggregate snapshot timestamp and resolved value is unchanged;
 - the post-title cache did not shrink.
 
 The before and candidate datasets can be exported with SHA-256 hashes. Normal

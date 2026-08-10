@@ -16,15 +16,36 @@ const before = {
 };
 const after = {
   ...before,
-  images: [image(1, 2), image(2)],
+  totalSnapshots: [
+    ...before.totalSnapshots,
+    { timestamp: '2026-08-10T01:00:00.000Z', dl: 1 }
+  ],
+  images: [{
+    ...image(1),
+    snapshots: [
+      ...image(1).snapshots,
+      { timestamp: '2026-08-10T01:00:00.000Z', dl: 1 }
+    ]
+  }, image(2)],
   postTitles: { ...before.postTitles, 20: { title: null, fetchedAt: '2026-08-10T01:00:00.000Z' } }
 };
 
 assert.equal(inspectStatsData(before).images, 1);
 assert.equal(assertSafeTransition(before, after).after.images, 2);
 assert.throws(
-  () => assertSafeTransition(after, before),
+  () => assertSafeTransition(after, { ...after, images: [after.images[0]] }),
   /candidate dropped image 2/
+);
+assert.throws(
+  () => assertSafeTransition(before, { ...before, images: [image(1, 2)] }),
+  /changed likes/
+);
+assert.throws(
+  () => assertSafeTransition(after, {
+    ...after,
+    images: [{ ...after.images[0], snapshots: after.images[0].snapshots.slice(1) }, image(2)]
+  }),
+  /lost snapshots/
 );
 assert.throws(
   () => assertSafeTransition(

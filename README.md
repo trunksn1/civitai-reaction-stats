@@ -17,7 +17,7 @@ This project consists of two components:
 - **Per-image statistics** with sorting by date, reactions, or comments
 - **Readable image names** from your post titles, with a rename box for the rest
 - **Dark theme** matching Civitai's aesthetic
-- **Smart data retention** - Automatic aggregation (hourly → 6-hour → daily) to prevent Gist size growth
+- **Append-only history** - Every collected observation is preserved and verified before a write
 - **Resilient API calls** - Exponential backoff retry logic with rate limit handling
 
 ## Architecture
@@ -205,7 +205,7 @@ The stats are stored in your Gist as JSON with time-series data:
 - **`totalSnapshots`** - Aggregate stats across all images at each timestamp
 - **`images[].snapshots`** - Individual image stats history for charting trends
 - **Time-series data** - Every hourly run adds a new snapshot to track growth over time
-- **Automatic aggregation** - Older snapshots are automatically downsampled to save space
+- **History preservation** - Scheduled runs retain every stored observation and validate it before writing
 
 ## How the Stats Refresh System Works
 
@@ -253,9 +253,14 @@ You can bypass the automatic schedule and force any tier manually:
 - Select your desired tier (daily/monthly/quarterly)
 - Use **quarterly** to force a complete refresh of all images anytime
 
-## Data Retention Policy
+## Historical Data Preservation
 
-To prevent your Gist from growing infinitely large, snapshots are automatically aggregated:
+Normal scheduled runs are append-only: existing aggregate and per-image
+observations must still be present with the same timestamp and counters in the
+candidate dataset. The collector aborts before writing if this invariant fails.
+
+Earlier collector versions automatically downsampled older observations using
+the following policy:
 
 | Time Period | Resolution | Example |
 |-------------|------------|---------|
@@ -263,11 +268,9 @@ To prevent your Gist from growing infinitely large, snapshots are automatically 
 | **7-30 days ago** | 6-hour intervals | Downsampled to 4 points per day |
 | **Beyond 30 days** | Daily intervals | One data point per day |
 
-**How it works:**
-- Every hour, a new snapshot is added
-- Older snapshots are automatically aggregated (keeps the last value in each time bucket)
-- This prevents exponential growth while maintaining long-term trend visibility
-- Applied to both `totalSnapshots` and individual `images[].snapshots`
+That destructive behavior is no longer called by the collector. Storage growth
+must be addressed through the versioned, backup-first storage migration tracked
+in `IMPROVEMENT_PLAN.md`, not by silently deleting historical observations.
 
 ## civitai.red split (R+ content)
 
@@ -470,8 +473,8 @@ GIST_ID=xxx GIST_TOKEN=xxx CIVITAI_USERNAME=xxx CIVITAI_API_KEY=xxx REFRESH_TIER
 ### Safe validation against the live dataset
 
 Manual workflow runs default to **dry-run enabled**. A dry run reads the existing
-Gist, performs discovery/refresh/merge/retention, validates that no existing
-image or post-title cache entry was dropped, uploads before/after JSON as a
+Gist, performs discovery/refresh/merge, validates that every historical
+snapshot plus every image and post-title cache entry was preserved, uploads before/after JSON as a
 short-lived Actions artifact, and **does not update the Gist**. Disable dry-run
 only when you deliberately want the manual run to write.
 

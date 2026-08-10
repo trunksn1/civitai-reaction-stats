@@ -70,8 +70,15 @@ export function assertSafeTransition(before, after) {
   const afterById = new Map(after.images.map(image => [String(image.id), image]));
 
   for (const image of before.images) {
-    invariant(afterById.has(String(image.id)), `candidate dropped image ${image.id}`);
+    const candidate = afterById.get(String(image.id));
+    invariant(candidate, `candidate dropped image ${image.id}`);
+    assertSnapshotHistoryPreserved(
+      image.snapshots,
+      candidate.snapshots,
+      `image ${image.id}`
+    );
   }
+  assertSnapshotHistoryPreserved(before.totalSnapshots, after.totalSnapshots, 'total history');
   const afterPostTitles = after.postTitles || {};
   for (const postId of Object.keys(before.postTitles || {})) {
     invariant(postId in afterPostTitles, `candidate dropped post-title cache entry ${postId}`);
@@ -80,4 +87,27 @@ export function assertSafeTransition(before, after) {
     `candidate dropped post-title cache entries (${beforeSummary.postTitles} -> ${afterSummary.postTitles})`);
 
   return { before: beforeSummary, after: afterSummary };
+}
+
+function assertSnapshotHistoryPreserved(beforeSnapshots, afterSnapshots, label) {
+  const beforeResolved = SnapshotCodec.resolveAll(beforeSnapshots);
+  const afterResolved = SnapshotCodec.resolveAll(afterSnapshots);
+
+  invariant(afterResolved.length >= beforeResolved.length,
+    `${label} lost snapshots (${beforeResolved.length} -> ${afterResolved.length})`);
+
+  for (let index = 0; index < beforeResolved.length; index++) {
+    const snapshot = beforeResolved[index];
+    const candidate = afterResolved[index];
+    invariant(candidate.timestamp === snapshot.timestamp,
+      `${label} changed snapshot order/timestamp at index ${index}`);
+    for (const [field] of FIELDS) {
+      invariant((candidate[field] || 0) === (snapshot[field] || 0),
+        `${label} changed ${field} at ${snapshot.timestamp}`);
+    }
+    if (snapshot.imageCount != null) {
+      invariant(candidate.imageCount === snapshot.imageCount,
+        `${label} changed imageCount at ${snapshot.timestamp}`);
+    }
+  }
 }
